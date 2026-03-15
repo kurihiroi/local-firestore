@@ -1,15 +1,18 @@
 import type Database from "better-sqlite3";
 import { Hono } from "hono";
+import { createBatchRoutes } from "./routes/batch.js";
 import { createDocumentRoutes } from "./routes/documents.js";
 import { createQueryRoutes } from "./routes/query.js";
 import { DocumentService } from "./services/document.js";
 import { QueryService } from "./services/query.js";
+import { TransactionService } from "./services/transaction.js";
 import { DocumentRepository } from "./storage/repository.js";
 
 export function createApp(db: Database.Database): Hono {
   const repo = new DocumentRepository(db);
   const documentService = new DocumentService(repo);
   const queryService = new QueryService(db);
+  const transactionService = new TransactionService(db);
 
   const app = new Hono();
 
@@ -21,6 +24,9 @@ export function createApp(db: Database.Database): Hono {
 
   // クエリルート
   app.route("/", createQueryRoutes(queryService));
+
+  // バッチ・トランザクションルート
+  app.route("/", createBatchRoutes(transactionService));
 
   return app;
 }

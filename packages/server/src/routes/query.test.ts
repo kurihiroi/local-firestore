@@ -1,13 +1,13 @@
+import type { QueryResponse } from "@local-firestore/shared";
+import type { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createApp } from "../app.js";
-import { createDatabase } from "../storage/sqlite.js";
+import { createTestApp, jsonBody, request } from "./test-helpers.js";
 
 describe("Query Routes", () => {
-  let app: ReturnType<typeof createApp>;
+  let app: Hono;
 
   beforeEach(async () => {
-    const db = createDatabase(":memory:");
-    app = createApp(db);
+    app = createTestApp();
 
     // テストデータ投入
     const users = [
@@ -16,25 +16,12 @@ describe("Query Routes", () => {
       { path: "users/charlie", data: { name: "Charlie", age: 35, status: "active" } },
     ];
     for (const u of users) {
-      await app.request(`/docs/${u.path}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: u.data }),
-      });
+      await request(app, "PUT", `/docs/${u.path}`, { data: u.data });
     }
   });
 
   async function postQuery(body: unknown) {
-    return app.request("/query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
-  // biome-ignore lint/suspicious/noExplicitAny: テスト用ヘルパー
-  async function jsonBody(res: Response): Promise<any> {
-    return res.json();
+    return request(app, "POST", "/query", body);
   }
 
   it("全ドキュメントを取得できる", async () => {
@@ -61,10 +48,10 @@ describe("Query Routes", () => {
         { type: "limit", limit: 2 },
       ],
     });
-    const body = await jsonBody(res);
+    const body = await jsonBody<QueryResponse>(res);
     expect(body.docs).toHaveLength(2);
-    expect(body.docs[0].data.name).toBe("Bob");
-    expect(body.docs[1].data.name).toBe("Alice");
+    expect((body.docs[0].data as Record<string, unknown>).name).toBe("Bob");
+    expect((body.docs[1].data as Record<string, unknown>).name).toBe("Alice");
   });
 
   it("不正なコレクションパスで400を返す", async () => {
