@@ -1,9 +1,16 @@
 export class HttpTransport {
   private baseUrl: string;
+  private wsUrl: string;
 
   constructor(host: string, port: number, ssl = false) {
     const protocol = ssl ? "https" : "http";
     this.baseUrl = `${protocol}://${host}:${port}`;
+    const wsProtocol = ssl ? "wss" : "ws";
+    this.wsUrl = `${wsProtocol}://${host}:${port}`;
+  }
+
+  getWebSocketUrl(): string {
+    return this.wsUrl;
   }
 
   async get<T>(path: string): Promise<T> {

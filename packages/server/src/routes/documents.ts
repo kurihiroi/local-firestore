@@ -12,7 +12,10 @@ import type { DocumentService } from "../services/document.js";
 import { DocumentNotFoundError } from "../services/document.js";
 import { isCollectionPath, isDocumentPath } from "../utils/path.js";
 
-export function createDocumentRoutes(documentService: DocumentService): Hono {
+export function createDocumentRoutes(
+  documentService: DocumentService,
+  onDocumentChange?: (path: string) => void,
+): Hono {
   const app = new Hono();
 
   // GET /docs/:path - ドキュメント取得
@@ -47,6 +50,7 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
     }
 
     const meta = documentService.addDocument(body.collectionPath, body.data);
+    onDocumentChange?.(meta.path);
     const response: AddDocumentResponse = {
       path: meta.path,
       documentId: meta.documentId,
@@ -66,6 +70,7 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
 
     const body = await c.req.json<SetDocumentRequest>();
     documentService.setDocument(path, body.data);
+    onDocumentChange?.(path);
     return c.json({ success: true });
   });
 
@@ -82,6 +87,7 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
     try {
       const body = await c.req.json<UpdateDocumentRequest>();
       documentService.updateDocument(path, body.data);
+      onDocumentChange?.(path);
       return c.json({ success: true });
     } catch (e) {
       if (e instanceof DocumentNotFoundError) {
@@ -102,6 +108,7 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
     }
 
     documentService.deleteDocument(path);
+    onDocumentChange?.(path);
     const response: DeleteDocumentResponse = { success: true };
     return c.json(response);
   });
