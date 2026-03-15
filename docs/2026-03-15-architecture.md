@@ -410,6 +410,12 @@ interface SerializedValue {
 - `DocumentChange` の `added` / `modified` / `removed` 判定
 - `Unsubscribe` 処理
 
+**現時点の制限事項:**
+
+- WebSocket 切断時の自動再接続・再サブスクライブは未実装
+- オフライン時の書き込みキューイング（オンライン復帰後の自動送信）は未対応
+- クライアント側のスナップショットキャッシュなし（常にサーバーから取得）
+
 ### Phase 5: 拡張機能
 
 **目標:** 実用レベルの機能を揃える
