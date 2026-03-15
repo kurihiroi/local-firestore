@@ -37,5 +37,6 @@ export { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 export type { TransactionOptions } from "./transaction.js";
 export { runTransaction, Transaction } from "./transaction.js";
 // Types
+export type { DocumentData } from "@local-firestore/shared";
 export type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 export { DocumentSnapshot, Timestamp } from "./types.js";
