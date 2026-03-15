@@ -1,6 +1,10 @@
 export type {
   AddDocumentRequest,
   AddDocumentResponse,
+  BatchOperation,
+  BatchOperationType,
+  BatchRequest,
+  BatchResponse,
   DeleteDocumentResponse,
   ErrorResponse,
   GetDocumentResponse,
@@ -8,6 +12,11 @@ export type {
   QueryRequest,
   QueryResponse,
   SetDocumentRequest,
+  TransactionBeginResponse,
+  TransactionCommitRequest,
+  TransactionCommitResponse,
+  TransactionGetRequest,
+  TransactionRollbackRequest,
   UpdateDocumentRequest,
 } from "./protocol.js";
 export { isFieldValueSentinel } from "./protocol.js";
