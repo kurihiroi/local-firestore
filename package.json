@@ -2,12 +2,14 @@
   "name": "local-firestore",
   "private": true,
   "scripts": {
-    "build": "pnpm -r run build",
+    "build": "pnpm --filter @local-firestore/shared run build && pnpm --filter @local-firestore/client --filter @local-firestore/server run build && pnpm --filter todo-app run build",
     "test": "pnpm -r run test",
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
     "format": "biome format --write .",
-    "typecheck": "pnpm -r exec tsc --noEmit"
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "dev:server": "pnpm --filter @local-firestore/server dev",
+    "dev:todo": "pnpm --filter todo-app dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

@@ -1,5 +1,4 @@
-// Firestore initialization
-
+export type { DocumentData } from "@local-firestore/shared";
 // Batch & Transaction
 export { WriteBatch, writeBatch } from "./batch.js";
 // CRUD operations
