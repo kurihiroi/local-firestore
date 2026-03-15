@@ -1,5 +1,6 @@
 import type {
   DocumentData,
+  FirestoreDataConverter,
   OrderByDirection,
   QueryRequest,
   QueryResponse,
@@ -14,7 +15,6 @@ import type { CollectionReference, Firestore } from "./types.js";
 // Query型
 // ============================================================
 
-// biome-ignore lint/correctness/noUnusedVariables: 将来のPhaseで型パラメータとして使用予定
 export interface Query<T = DocumentData> {
   readonly type: "query";
   readonly collectionPath: string;
@@ -22,6 +22,12 @@ export interface Query<T = DocumentData> {
   readonly constraints: SerializedQueryConstraint[];
   /** @internal */
   readonly _firestore: Firestore;
+  /** @internal */
+  readonly _converter: FirestoreDataConverter<T> | null;
+
+  /** データコンバーターを設定した新しいクエリを返す */
+  withConverter<U>(converter: FirestoreDataConverter<U>): Query<U>;
+  withConverter(converter: null): Query<DocumentData>;
 }
 
 // ============================================================
@@ -30,6 +36,36 @@ export interface Query<T = DocumentData> {
 
 export interface QueryConstraint {
   readonly _serialized: SerializedQueryConstraint;
+}
+
+/** @internal Queryオブジェクトを生成する */
+function createQuery<T>(
+  collectionPath: string,
+  collectionGroupFlag: boolean,
+  constraints: SerializedQueryConstraint[],
+  firestore: Firestore,
+  converter: FirestoreDataConverter<T> | null,
+): Query<T> {
+  return {
+    type: "query",
+    collectionPath,
+    collectionGroup: collectionGroupFlag,
+    constraints,
+    _firestore: firestore,
+    _converter: converter,
+    withConverter<U>(c: FirestoreDataConverter<U> | null) {
+      if (c === null) {
+        return createQuery<DocumentData>(
+          collectionPath,
+          collectionGroupFlag,
+          constraints,
+          firestore,
+          null,
+        );
+      }
+      return createQuery<U>(collectionPath, collectionGroupFlag, constraints, firestore, c);
+    },
+  };
 }
 
 /** クエリを構築する */
@@ -50,13 +86,13 @@ export function query<T = DocumentData>(
           constraints: [...ref.constraints],
         };
 
-  return {
-    type: "query",
-    collectionPath: base.collectionPath,
-    collectionGroup: base.collectionGroup,
-    constraints: [...base.constraints, ...constraints.map((c) => c._serialized)],
-    _firestore: ref._firestore,
-  };
+  return createQuery<T>(
+    base.collectionPath,
+    base.collectionGroup,
+    [...base.constraints, ...constraints.map((c) => c._serialized)],
+    ref._firestore,
+    ref._converter,
+  );
 }
 
 /** コレクショングループクエリを作成する */
@@ -64,13 +100,7 @@ export function collectionGroup<T = DocumentData>(
   firestore: Firestore,
   collectionId: string,
 ): Query<T> {
-  return {
-    type: "query",
-    collectionPath: collectionId,
-    collectionGroup: true,
-    constraints: [],
-    _firestore: firestore,
-  };
+  return createQuery<T>(collectionId, true, [], firestore, null);
 }
 
 /** whereフィルタ制約を作成する */
@@ -163,10 +193,28 @@ export async function getDocs<T = DocumentData>(
   };
 
   const res = await transport.post<QueryResponse>("/query", body);
+  const converter = q._converter;
 
   const docs = res.docs.map((d) => {
     const segments = d.path.split("/");
     const docId = segments[segments.length - 1];
+    if (converter) {
+      const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+        d.path,
+        docId,
+        d.data,
+        d.createTime,
+        d.updateTime,
+      );
+      const converted = converter.fromFirestore(rawSnapshot);
+      return new QueryDocumentSnapshot<T>(
+        d.path,
+        docId,
+        converted as T,
+        d.createTime,
+        d.updateTime,
+      );
+    }
     return new QueryDocumentSnapshot<T>(d.path, docId, d.data as T, d.createTime, d.updateTime);
   });
 

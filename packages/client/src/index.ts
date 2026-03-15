@@ -1,4 +1,9 @@
-export type { DocumentData } from "@local-firestore/shared";
+export type {
+  DocumentData,
+  FirestoreDataConverter,
+  PartialWithFieldValue,
+  WithFieldValue,
+} from "@local-firestore/shared";
 // Aggregate
 export type { AggregateSpec, AggregateSpecData } from "./aggregate.js";
 export {

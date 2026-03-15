@@ -53,6 +53,48 @@ export interface DocumentMetadata {
 export type SetOptions = { merge: true } | { mergeFields: string[] };
 
 // ============================================================
+// データコンバーター・型ヘルパー
+// ============================================================
+
+/** プリミティブ型 */
+type Primitive = string | number | boolean | undefined | null;
+
+/** FieldValue付きの型（setDoc用） */
+export type WithFieldValue<T> = T extends Primitive
+  ? T
+  : T extends Record<string, unknown>
+    ? { [K in keyof T]: WithFieldValue<T[K]> | FieldValueSentinel }
+    : T;
+
+/** Partial + FieldValue付きの型（merge setDoc用） */
+export type PartialWithFieldValue<T> = T extends Primitive
+  ? T
+  : T extends Record<string, unknown>
+    ? { [K in keyof T]?: PartialWithFieldValue<T[K]> | FieldValueSentinel }
+    : T;
+
+/**
+ * FirestoreDataConverter
+ *
+ * アプリケーション型 (AppModelType) と Firestore データ型 (DbModelType) の相互変換を行う。
+ * `withConverter()` で DocumentReference / CollectionReference / Query にアタッチして使用する。
+ */
+export interface FirestoreDataConverter<
+  AppModelType,
+  DbModelType extends DocumentData = DocumentData,
+> {
+  /** アプリケーション型 → Firestoreデータ型に変換する（書き込み時） */
+  toFirestore(modelObject: WithFieldValue<AppModelType>): WithFieldValue<DbModelType>;
+  toFirestore(
+    modelObject: PartialWithFieldValue<AppModelType>,
+    options: SetOptions,
+  ): PartialWithFieldValue<DbModelType>;
+
+  /** Firestoreデータ型 → アプリケーション型に変換する（読み取り時） */
+  fromFirestore(snapshot: { data(): DocumentData }): AppModelType;
+}
+
+// ============================================================
 // クエリ関連型
 // ============================================================
 

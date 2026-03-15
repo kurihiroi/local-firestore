@@ -37,6 +37,8 @@ describe("AggregateQuerySnapshot", () => {
       collectionGroup: false,
       constraints: [],
       _firestore: { type: "firestore" as const, _transport: {} as never },
+      _converter: null,
+      withConverter: (() => mockQuery) as never,
     };
 
     const snapshot = new AggregateQuerySnapshot(mockQuery, {

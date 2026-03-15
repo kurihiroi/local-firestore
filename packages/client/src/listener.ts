@@ -1,6 +1,7 @@
 import type {
   DocumentChangeData,
   DocumentData,
+  FirestoreDataConverter,
   SerializedQueryConstraint,
   ServerMessage,
 } from "@local-firestore/shared";
@@ -37,17 +38,19 @@ interface DocCallback<T = DocumentData> {
   onNext: (snapshot: DocumentSnapshot<T>) => void;
   onError?: (error: Error) => void;
   ref: DocumentReference<T>;
+  converter: FirestoreDataConverter<T> | null;
 }
 
 interface QueryCallback<T = DocumentData> {
   kind: "query";
   onNext: (snapshot: QuerySnapshot<T>) => void;
   onError?: (error: Error) => void;
+  converter: FirestoreDataConverter<T> | null;
 }
 
-type SubscriptionCallback<T = DocumentData> = DocCallback<T> | QueryCallback<T>;
+type SubscriptionCallback = DocCallback<unknown> | QueryCallback<unknown>;
 
-const subscriptionCallbacks = new Map<string, SubscriptionCallback<never>>();
+const subscriptionCallbacks = new Map<string, SubscriptionCallback>();
 
 let subscriptionCounter = 0;
 
@@ -73,34 +76,70 @@ function getOrCreateWebSocket(firestore: Firestore): WebSocket {
     switch (msg.type) {
       case "doc_snapshot": {
         if (cb.kind !== "doc") break;
-        const docCb = cb as DocCallback<DocumentData>;
-        const snapshot = new DocumentSnapshotImpl(
-          docCb.ref,
-          msg.exists ? (msg.data as DocumentData) : null,
-          msg.createTime,
-          msg.updateTime,
-        );
+        const docCb = cb as DocCallback<unknown>;
+        let data: DocumentData | null = msg.exists ? (msg.data as DocumentData) : null;
+        if (data && docCb.converter) {
+          const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+            docCb.ref.path,
+            docCb.ref.id,
+            data,
+            msg.createTime ?? "",
+            msg.updateTime ?? "",
+          );
+          data = docCb.converter.fromFirestore(rawSnapshot) as DocumentData;
+        }
+        const snapshot = new DocumentSnapshotImpl(docCb.ref, data, msg.createTime, msg.updateTime);
         docCb.onNext(snapshot);
         break;
       }
       case "query_snapshot": {
         if (cb.kind !== "query") break;
-        const queryCb = cb as QueryCallback<DocumentData>;
+        const queryCb = cb as QueryCallback<unknown>;
+        const conv = queryCb.converter;
         const docs = msg.docs.map((d) => {
           const segments = d.path.split("/");
           const docId = segments[segments.length - 1];
+          if (conv) {
+            const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+              d.path,
+              docId,
+              d.data,
+              d.createTime,
+              d.updateTime,
+            );
+            const converted = conv.fromFirestore(rawSnapshot);
+            return new QueryDocumentSnapshot(
+              d.path,
+              docId,
+              converted as DocumentData,
+              d.createTime,
+              d.updateTime,
+            );
+          }
           return new QueryDocumentSnapshot(d.path, docId, d.data, d.createTime, d.updateTime);
         });
         const changes: DocumentChange<DocumentData>[] = msg.changes.map(
           (ch: DocumentChangeData) => {
             const segments = ch.path.split("/");
             const docId = segments[segments.length - 1];
+            const rawData = ch.data ?? {};
+            let docData: DocumentData = rawData;
+            if (conv) {
+              const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+                ch.path,
+                docId,
+                rawData,
+                ch.createTime ?? "",
+                ch.updateTime ?? "",
+              );
+              docData = conv.fromFirestore(rawSnapshot) as DocumentData;
+            }
             return {
               type: ch.type,
               doc: new QueryDocumentSnapshot(
                 ch.path,
                 docId,
-                ch.data ?? {},
+                docData,
                 ch.createTime ?? "",
                 ch.updateTime ?? "",
               ),
@@ -115,10 +154,10 @@ function getOrCreateWebSocket(firestore: Firestore): WebSocket {
       }
       case "error": {
         if (cb.kind === "doc") {
-          const docCb = cb as DocCallback<DocumentData>;
+          const docCb = cb as DocCallback<unknown>;
           docCb.onError?.(new Error(`[${msg.code}] ${msg.message}`));
         } else {
-          const queryCb = cb as QueryCallback<DocumentData>;
+          const queryCb = cb as QueryCallback<unknown>;
           queryCb.onError?.(new Error(`[${msg.code}] ${msg.message}`));
         }
         break;
@@ -152,9 +191,10 @@ export function onSnapshotDoc<T = DocumentData>(
 
   subscriptionCallbacks.set(subscriptionId, {
     kind: "doc",
-    onNext: onNext as (snapshot: DocumentSnapshot<never>) => void,
+    onNext: onNext as (snapshot: DocumentSnapshot<unknown>) => void,
     onError,
-    ref: ref as DocumentReference<never>,
+    ref: ref as DocumentReference<unknown>,
+    converter: ref._converter as FirestoreDataConverter<unknown> | null,
   });
 
   sendWhenReady(
@@ -188,8 +228,9 @@ export function onSnapshotQuery<T = DocumentData>(
 
   subscriptionCallbacks.set(subscriptionId, {
     kind: "query",
-    onNext: onNext as (snapshot: QuerySnapshot<never>) => void,
+    onNext: onNext as (snapshot: QuerySnapshot<unknown>) => void,
     onError,
+    converter: (queryOrRef._converter ?? null) as FirestoreDataConverter<unknown> | null,
   });
 
   let collectionPath: string;
