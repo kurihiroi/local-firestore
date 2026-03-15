@@ -4,7 +4,7 @@ import type {
   DocumentData,
   SerializedAggregateSpec,
 } from "@local-firestore/shared";
-import type { Query } from "./query.js";
+import { type Query, query as toQuery } from "./query.js";
 import type { CollectionReference } from "./types.js";
 
 // ============================================================
@@ -92,16 +92,7 @@ export async function getAggregateFromServer<
   aggregateSpec: AggregateSpecType,
 ): Promise<AggregateQuerySnapshot<AggregateSpecType, T>> {
   // CollectionReferenceをQueryに変換
-  const q: Query<T> =
-    queryOrRef.type === "collection"
-      ? {
-          type: "query",
-          collectionPath: queryOrRef.path,
-          collectionGroup: false,
-          constraints: [],
-          _firestore: queryOrRef._firestore,
-        }
-      : queryOrRef;
+  const q: Query<T> = queryOrRef.type === "collection" ? toQuery(queryOrRef) : queryOrRef;
 
   // AggregateSpecをシリアライズ
   const serializedSpec: SerializedAggregateSpec = {};

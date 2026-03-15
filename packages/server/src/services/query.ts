@@ -19,10 +19,12 @@ export class QueryService {
     constraints: SerializedQueryConstraint[],
     collectionGroup = false,
   ): DocumentMetadata[] {
-    const wheres = constraints.filter((c): c is SerializedWhereConstraint => c.type === "where");
-    const composites = constraints.filter(
-      (c): c is SerializedCompositeFilterConstraint => c.type === "and" || c.type === "or",
+    const { conditions, params } = buildFilterConditions(
+      collectionPath,
+      constraints,
+      collectionGroup,
     );
+
     const orderBys = constraints.filter(
       (c): c is SerializedOrderByConstraint => c.type === "orderBy",
     );
@@ -36,34 +38,6 @@ export class QueryService {
         c.type === "endAt" ||
         c.type === "endBefore",
     );
-
-    const params: unknown[] = [];
-    const conditions: string[] = [];
-
-    // コレクション条件
-    if (collectionGroup) {
-      // コレクショングループ: collection_pathの末尾がcollectionPathに一致
-      // 例: "posts" → collection_path = 'posts' OR collection_path LIKE '%/posts'
-      conditions.push("(collection_path = ? OR collection_path LIKE ?)");
-      params.push(collectionPath, `%/${collectionPath}`);
-    } else {
-      conditions.push("collection_path = ?");
-      params.push(collectionPath);
-    }
-
-    // whereフィルタ
-    for (const w of wheres) {
-      const { sql, sqlParams } = buildWhereClause(w);
-      conditions.push(sql);
-      params.push(...sqlParams);
-    }
-
-    // 複合フィルタ (and/or)
-    for (const comp of composites) {
-      const { sql, sqlParams } = buildCompositeClause(comp);
-      conditions.push(sql);
-      params.push(...sqlParams);
-    }
 
     // ORDER BY
     let orderByClause = "";
@@ -125,41 +99,17 @@ export class QueryService {
     aggregateSpec: SerializedAggregateSpec,
     collectionGroup = false,
   ): AggregateResultData {
-    const wheres = constraints.filter((c): c is SerializedWhereConstraint => c.type === "where");
-    const composites = constraints.filter(
-      (c): c is SerializedCompositeFilterConstraint => c.type === "and" || c.type === "or",
+    const { conditions, params } = buildFilterConditions(
+      collectionPath,
+      constraints,
+      collectionGroup,
     );
-
-    const params: unknown[] = [];
-    const conditions: string[] = [];
-
-    // コレクション条件
-    if (collectionGroup) {
-      conditions.push("(collection_path = ? OR collection_path LIKE ?)");
-      params.push(collectionPath, `%/${collectionPath}`);
-    } else {
-      conditions.push("collection_path = ?");
-      params.push(collectionPath);
-    }
-
-    // whereフィルタ
-    for (const w of wheres) {
-      const { sql, sqlParams } = buildWhereClause(w);
-      conditions.push(sql);
-      params.push(...sqlParams);
-    }
-
-    // 複合フィルタ (and/or)
-    for (const comp of composites) {
-      const { sql, sqlParams } = buildCompositeClause(comp);
-      conditions.push(sql);
-      params.push(...sqlParams);
-    }
 
     // 集計SELECT式を構築
     const selectParts: string[] = [];
     const aliases = Object.keys(aggregateSpec);
     for (const alias of aliases) {
+      validateAlias(alias);
       const field = aggregateSpec[alias];
       switch (field.aggregateType) {
         case "count":
@@ -181,6 +131,10 @@ export class QueryService {
           selectParts.push(`AVG(${fieldExpr}) AS "${alias}"`);
           break;
         }
+        default: {
+          const _exhaustive: never = field.aggregateType;
+          throw new Error(`Unsupported aggregate type: ${_exhaustive}`);
+        }
       }
     }
 
@@ -192,6 +146,52 @@ export class QueryService {
       result[alias] = row ? (row[alias] ?? null) : null;
     }
     return result;
+  }
+}
+
+/** WHERE条件の共通構築ロジック（executeQuery / executeAggregate 共通） */
+function buildFilterConditions(
+  collectionPath: string,
+  constraints: SerializedQueryConstraint[],
+  collectionGroup: boolean,
+): { conditions: string[]; params: unknown[] } {
+  const wheres = constraints.filter((c): c is SerializedWhereConstraint => c.type === "where");
+  const composites = constraints.filter(
+    (c): c is SerializedCompositeFilterConstraint => c.type === "and" || c.type === "or",
+  );
+
+  const params: unknown[] = [];
+  const conditions: string[] = [];
+
+  // コレクション条件
+  if (collectionGroup) {
+    conditions.push("(collection_path = ? OR collection_path LIKE ?)");
+    params.push(collectionPath, `%/${collectionPath}`);
+  } else {
+    conditions.push("collection_path = ?");
+    params.push(collectionPath);
+  }
+
+  // whereフィルタ
+  for (const w of wheres) {
+    const { sql, sqlParams } = buildWhereClause(w);
+    conditions.push(sql);
+    params.push(...sqlParams);
+  }
+
+  // 複合フィルタ (and/or)
+  for (const comp of composites) {
+    const { sql, sqlParams } = buildCompositeClause(comp);
+    conditions.push(sql);
+    params.push(...sqlParams);
+  }
+
+  return { conditions, params };
+}
+
+function validateAlias(alias: string): void {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) {
+    throw new Error(`Invalid aggregate alias: "${alias}"`);
   }
 }
 
