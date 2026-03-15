@@ -32,10 +32,15 @@ describe("Query Routes", () => {
     });
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: テスト用ヘルパー
+  async function jsonBody(res: Response): Promise<any> {
+    return res.json();
+  }
+
   it("全ドキュメントを取得できる", async () => {
     const res = await postQuery({ collectionPath: "users", constraints: [] });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await jsonBody(res);
     expect(body.docs).toHaveLength(3);
   });
 
@@ -44,7 +49,7 @@ describe("Query Routes", () => {
       collectionPath: "users",
       constraints: [{ type: "where", fieldPath: "status", op: "==", value: "active" }],
     });
-    const body = await res.json();
+    const body = await jsonBody(res);
     expect(body.docs).toHaveLength(2);
   });
 
@@ -56,7 +61,7 @@ describe("Query Routes", () => {
         { type: "limit", limit: 2 },
       ],
     });
-    const body = await res.json();
+    const body = await jsonBody(res);
     expect(body.docs).toHaveLength(2);
     expect(body.docs[0].data.name).toBe("Bob");
     expect(body.docs[1].data.name).toBe("Alice");

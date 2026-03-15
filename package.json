@@ -7,7 +7,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
     "format": "biome format --write .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "pnpm -r exec tsc --noEmit"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

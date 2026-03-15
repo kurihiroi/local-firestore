@@ -19,11 +19,16 @@ describe("Document Routes", () => {
     return app.request(path, init);
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: テスト用ヘルパー
+  async function jsonBody(res: Response): Promise<any> {
+    return res.json();
+  }
+
   describe("GET /health", () => {
     it("ヘルスチェックが成功する", async () => {
       const res = await request("GET", "/health");
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ status: "ok" });
+      expect(await jsonBody(res)).toEqual({ status: "ok" });
     });
   });
 
@@ -33,7 +38,7 @@ describe("Document Routes", () => {
         data: { name: "Alice", age: 30 },
       });
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ success: true });
+      expect(await jsonBody(res)).toEqual({ success: true });
     });
 
     it("不正なパスで400を返す", async () => {
@@ -53,7 +58,7 @@ describe("Document Routes", () => {
       const res = await request("GET", "/docs/users/alice");
       expect(res.status).toBe(200);
 
-      const body = await res.json();
+      const body = await jsonBody(res);
       expect(body.exists).toBe(true);
       expect(body.data).toEqual({ name: "Alice", age: 30 });
       expect(body.createTime).toBeDefined();
@@ -64,7 +69,7 @@ describe("Document Routes", () => {
       const res = await request("GET", "/docs/users/nobody");
       expect(res.status).toBe(200);
 
-      const body = await res.json();
+      const body = await jsonBody(res);
       expect(body.exists).toBe(false);
       expect(body.data).toBeNull();
     });
@@ -78,7 +83,7 @@ describe("Document Routes", () => {
       });
       expect(res.status).toBe(201);
 
-      const body = await res.json();
+      const body = await jsonBody(res);
       expect(body.documentId).toHaveLength(20);
       expect(body.path).toBe(`users/${body.documentId}`);
     });
@@ -104,7 +109,7 @@ describe("Document Routes", () => {
       expect(res.status).toBe(200);
 
       const getRes = await request("GET", "/docs/users/alice");
-      const body = await getRes.json();
+      const body = await jsonBody(getRes);
       expect(body.data).toEqual({ name: "Alice", age: 31 });
     });
 
@@ -126,7 +131,7 @@ describe("Document Routes", () => {
       expect(res.status).toBe(200);
 
       const getRes = await request("GET", "/docs/users/alice");
-      const body = await getRes.json();
+      const body = await jsonBody(getRes);
       expect(body.exists).toBe(false);
     });
   });
@@ -138,7 +143,7 @@ describe("Document Routes", () => {
       });
 
       const getRes = await request("GET", "/docs/users/alice/posts/post1");
-      const body = await getRes.json();
+      const body = await jsonBody(getRes);
       expect(body.exists).toBe(true);
       expect(body.data).toEqual({ title: "Hello World" });
     });
