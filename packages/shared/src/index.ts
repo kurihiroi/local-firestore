@@ -3,9 +3,18 @@ export type {
   DocumentMetadata,
   FieldValueSentinel,
   FieldValueType,
+  OrderByDirection,
+  QueryConstraintType,
+  SerializedCompositeFilterConstraint,
+  SerializedCursorConstraint,
+  SerializedLimitConstraint,
+  SerializedOrderByConstraint,
+  SerializedQueryConstraint,
   SerializedSpecialValue,
   SerializedTimestamp,
+  SerializedWhereConstraint,
   SetOptions,
+  WhereFilterOp,
 } from "./types.js";
 
 export type {
@@ -14,6 +23,9 @@ export type {
   DeleteDocumentResponse,
   ErrorResponse,
   GetDocumentResponse,
+  QueryDocumentData,
+  QueryRequest,
+  QueryResponse,
   SetDocumentRequest,
   UpdateDocumentRequest,
 } from "./protocol.js";
