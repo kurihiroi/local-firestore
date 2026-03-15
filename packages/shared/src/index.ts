@@ -38,3 +38,4 @@ export type {
   SetOptions,
   WhereFilterOp,
 } from "./types.js";
+export { ERROR_CODES } from "./types.js";

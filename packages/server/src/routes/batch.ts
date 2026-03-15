@@ -9,6 +9,7 @@ import type {
   TransactionGetRequest,
   TransactionRollbackRequest,
 } from "@local-firestore/shared";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import type { TransactionService } from "../services/transaction.js";
 import {
@@ -75,8 +76,6 @@ export function createBatchRoutes(transactionService: TransactionService): Hono 
 
   return app;
 }
-
-import type { Context } from "hono";
 
 function handleError(c: Context, e: unknown) {
   if (e instanceof TransactionConflictError) {

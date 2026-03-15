@@ -4,24 +4,37 @@ import { nanoid } from "nanoid";
 import { DocumentRepository } from "../storage/repository.js";
 import { DocumentService } from "./document.js";
 
+const TRANSACTION_TTL_MS = 30_000;
+const CLEANUP_INTERVAL_MS = 60_000;
+
 export class TransactionService {
   private activeTxns = new Map<string, { reads: Map<string, number | null>; expiresAt: number }>();
+  private repo: DocumentRepository;
+  private docService: DocumentService;
+  private cleanupTimer: ReturnType<typeof setInterval>;
 
-  constructor(private db: Database.Database) {}
+  constructor(private db: Database.Database) {
+    this.repo = new DocumentRepository(db);
+    this.docService = new DocumentService(this.repo);
+    this.cleanupTimer = setInterval(() => this.cleanupExpiredTxns(), CLEANUP_INTERVAL_MS);
+  }
+
+  dispose(): void {
+    clearInterval(this.cleanupTimer);
+  }
 
   begin(): string {
     const id = nanoid(20);
     this.activeTxns.set(id, {
       reads: new Map(),
-      expiresAt: Date.now() + 30_000, // 30秒で期限切れ
+      expiresAt: Date.now() + TRANSACTION_TTL_MS,
     });
     return id;
   }
 
   getDocument(transactionId: string, path: string): DocumentMetadata | undefined {
     const txn = this.getActiveTxn(transactionId);
-    const repo = new DocumentRepository(this.db);
-    const doc = repo.get(path);
+    const doc = this.repo.get(path);
 
     // 読み取ったドキュメントのバージョンを記録
     txn.reads.set(path, doc?.version ?? null);
@@ -32,34 +45,17 @@ export class TransactionService {
   commit(transactionId: string, operations: BatchOperation[]): void {
     const txn = this.getActiveTxn(transactionId);
 
-    // SQLiteトランザクション内で実行
     const run = this.db.transaction(() => {
-      const repo = new DocumentRepository(this.db);
-      const docService = new DocumentService(repo);
-
       // 楽観的同時実行制御: 読み取ったドキュメントのバージョンが変わっていないかチェック
       for (const [path, readVersion] of txn.reads) {
-        const current = repo.get(path);
+        const current = this.repo.get(path);
         const currentVersion = current?.version ?? null;
         if (currentVersion !== readVersion) {
           throw new TransactionConflictError(path);
         }
       }
 
-      // 操作を実行
-      for (const op of operations) {
-        switch (op.type) {
-          case "set":
-            docService.setDocument(op.path, op.data ?? {});
-            break;
-          case "update":
-            docService.updateDocument(op.path, op.data ?? {});
-            break;
-          case "delete":
-            docService.deleteDocument(op.path);
-            break;
-        }
-      }
+      this.applyOperations(operations);
     });
 
     try {
@@ -75,25 +71,29 @@ export class TransactionService {
 
   executeBatch(operations: BatchOperation[]): void {
     const run = this.db.transaction(() => {
-      const repo = new DocumentRepository(this.db);
-      const docService = new DocumentService(repo);
+      this.applyOperations(operations);
+    });
+    run();
+  }
 
-      for (const op of operations) {
-        switch (op.type) {
-          case "set":
-            docService.setDocument(op.path, op.data ?? {});
-            break;
-          case "update":
-            docService.updateDocument(op.path, op.data ?? {});
-            break;
-          case "delete":
-            docService.deleteDocument(op.path);
-            break;
+  private applyOperations(operations: BatchOperation[]): void {
+    for (const op of operations) {
+      switch (op.type) {
+        case "set":
+          this.docService.setDocument(op.path, op.data ?? {});
+          break;
+        case "update":
+          this.docService.updateDocument(op.path, op.data ?? {});
+          break;
+        case "delete":
+          this.docService.deleteDocument(op.path);
+          break;
+        default: {
+          const _exhaustive: never = op.type;
+          throw new Error(`Unknown operation type: ${_exhaustive}`);
         }
       }
-    });
-
-    run();
+    }
   }
 
   private getActiveTxn(transactionId: string) {
@@ -106,6 +106,15 @@ export class TransactionService {
       throw new TransactionExpiredError(transactionId);
     }
     return txn;
+  }
+
+  private cleanupExpiredTxns(): void {
+    const now = Date.now();
+    for (const [id, txn] of this.activeTxns) {
+      if (now > txn.expiresAt) {
+        this.activeTxns.delete(id);
+      }
+    }
   }
 }
 

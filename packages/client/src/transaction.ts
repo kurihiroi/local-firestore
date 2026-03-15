@@ -5,6 +5,7 @@ import type {
   TransactionBeginResponse,
   TransactionCommitResponse,
 } from "@local-firestore/shared";
+import { ERROR_CODES } from "@local-firestore/shared";
 import type { DocumentReference, Firestore } from "./types.js";
 import { DocumentSnapshot } from "./types.js";
 
@@ -41,7 +42,7 @@ export async function runTransaction<T>(
       await transport.post("/transaction/rollback", { transactionId }).catch(() => {});
 
       const isConflict =
-        e instanceof Error && "code" in e && (e as { code: string }).code === "aborted";
+        e instanceof Error && "code" in e && (e as { code: string }).code === ERROR_CODES.ABORTED;
       if (isConflict && attempt < maxAttempts - 1) {
         continue;
       }

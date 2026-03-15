@@ -1,3 +1,11 @@
+/** Firestoreエラーコード定数 */
+export const ERROR_CODES = {
+  ABORTED: "aborted",
+  NOT_FOUND: "not-found",
+  DEADLINE_EXCEEDED: "deadline-exceeded",
+  INVALID_ARGUMENT: "invalid-argument",
+} as const;
+
 /** Firestoreドキュメントのデータ型 */
 export interface DocumentData {
   [field: string]: unknown;

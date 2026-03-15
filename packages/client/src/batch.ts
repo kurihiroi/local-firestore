@@ -8,10 +8,18 @@ export function writeBatch(firestore: Firestore): WriteBatch {
 
 export class WriteBatch {
   private operations: BatchOperation[] = [];
+  private committed = false;
 
   constructor(private firestore: Firestore) {}
 
+  private ensureNotCommitted(): void {
+    if (this.committed) {
+      throw new Error("WriteBatch has already been committed");
+    }
+  }
+
   set<T = DocumentData>(ref: DocumentReference<T>, data: T): this {
+    this.ensureNotCommitted();
     this.operations.push({
       type: "set",
       path: ref.path,
@@ -21,6 +29,7 @@ export class WriteBatch {
   }
 
   update<T = DocumentData>(ref: DocumentReference<T>, data: Partial<T>): this {
+    this.ensureNotCommitted();
     this.operations.push({
       type: "update",
       path: ref.path,
@@ -30,6 +39,7 @@ export class WriteBatch {
   }
 
   delete<T = DocumentData>(ref: DocumentReference<T>): this {
+    this.ensureNotCommitted();
     this.operations.push({
       type: "delete",
       path: ref.path,
@@ -38,6 +48,8 @@ export class WriteBatch {
   }
 
   async commit(): Promise<void> {
+    this.ensureNotCommitted();
+    this.committed = true;
     const transport = this.firestore._transport;
     await transport.post<BatchResponse>("/batch", {
       operations: this.operations,
