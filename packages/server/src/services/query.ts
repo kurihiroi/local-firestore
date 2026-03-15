@@ -1,13 +1,13 @@
-import type Database from "better-sqlite3";
 import type {
   DocumentMetadata,
+  SerializedCompositeFilterConstraint,
+  SerializedCursorConstraint,
+  SerializedLimitConstraint,
+  SerializedOrderByConstraint,
   SerializedQueryConstraint,
   SerializedWhereConstraint,
-  SerializedOrderByConstraint,
-  SerializedLimitConstraint,
-  SerializedCursorConstraint,
-  SerializedCompositeFilterConstraint,
 } from "@local-firestore/shared";
+import type Database from "better-sqlite3";
 
 export class QueryService {
   constructor(private db: Database.Database) {}
@@ -107,7 +107,7 @@ export class QueryService {
     const sql = `SELECT * FROM documents WHERE ${conditions.join(" AND ")}${orderByClause}${limitClause}`;
     const rows = this.db.prepare(sql).all(...params) as RawRow[];
 
-    let results = rows.map(toMetadata);
+    const results = rows.map(toMetadata);
 
     // limitToLastの場合、結果を元の順序に戻す
     if (isLimitToLast) {
@@ -123,7 +123,6 @@ function buildWhereClause(w: SerializedWhereConstraint): {
   sqlParams: unknown[];
 } {
   const fieldExpr = `json_extract(data, '$.${escapePath(w.fieldPath)}')`;
-  const params: unknown[] = [];
 
   switch (w.op) {
     case "==":

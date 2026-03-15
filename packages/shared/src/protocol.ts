@@ -1,4 +1,9 @@
-import type { DocumentData, FieldValueSentinel, SerializedQueryConstraint, SetOptions } from "./types.js";
+import type {
+  DocumentData,
+  FieldValueSentinel,
+  SerializedQueryConstraint,
+  SetOptions,
+} from "./types.js";
 
 // ============================================================
 // HTTP Request / Response

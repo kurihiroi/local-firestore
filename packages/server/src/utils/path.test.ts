@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseDocumentPath, isCollectionPath, isDocumentPath } from "./path.js";
+import { describe, expect, it } from "vitest";
+import { isCollectionPath, isDocumentPath, parseDocumentPath } from "./path.js";
 
 describe("parseDocumentPath", () => {
   it("トップレベルのドキュメントパスをパースできる", () => {

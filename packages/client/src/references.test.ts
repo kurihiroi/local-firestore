@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { getFirestore } from "./firestore.js";
-import { doc, collection } from "./references.js";
+import { collection, doc } from "./references.js";
 
 describe("doc()", () => {
   const db = getFirestore();

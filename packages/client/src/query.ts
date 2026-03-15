@@ -1,19 +1,20 @@
 import type {
   DocumentData,
-  WhereFilterOp,
   OrderByDirection,
-  SerializedQueryConstraint,
-  SerializedWhereConstraint,
   QueryRequest,
   QueryResponse,
+  SerializedQueryConstraint,
+  SerializedWhereConstraint,
+  WhereFilterOp,
 } from "@local-firestore/shared";
-import type { CollectionReference, Firestore } from "./types.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
+import type { CollectionReference, Firestore } from "./types.js";
 
 // ============================================================
 // Query型
 // ============================================================
 
+// biome-ignore lint/correctness/noUnusedVariables: 将来のPhaseで型パラメータとして使用予定
 export interface Query<T = DocumentData> {
   readonly type: "query";
   readonly collectionPath: string;
@@ -36,9 +37,18 @@ export function query<T = DocumentData>(
   ref: CollectionReference<T> | Query<T>,
   ...constraints: QueryConstraint[]
 ): Query<T> {
-  const base = ref.type === "collection"
-    ? { collectionPath: ref.path, collectionGroup: false, constraints: [] as SerializedQueryConstraint[] }
-    : { collectionPath: ref.collectionPath, collectionGroup: ref.collectionGroup, constraints: [...ref.constraints] };
+  const base =
+    ref.type === "collection"
+      ? {
+          collectionPath: ref.path,
+          collectionGroup: false,
+          constraints: [] as SerializedQueryConstraint[],
+        }
+      : {
+          collectionPath: ref.collectionPath,
+          collectionGroup: ref.collectionGroup,
+          constraints: [...ref.constraints],
+        };
 
   return {
     type: "query",
@@ -64,21 +74,14 @@ export function collectionGroup<T = DocumentData>(
 }
 
 /** whereフィルタ制約を作成する */
-export function where(
-  fieldPath: string,
-  op: WhereFilterOp,
-  value: unknown,
-): QueryConstraint {
+export function where(fieldPath: string, op: WhereFilterOp, value: unknown): QueryConstraint {
   return {
     _serialized: { type: "where", fieldPath, op, value },
   };
 }
 
 /** orderBy制約を作成する */
-export function orderBy(
-  fieldPath: string,
-  direction: OrderByDirection = "asc",
-): QueryConstraint {
+export function orderBy(fieldPath: string, direction: OrderByDirection = "asc"): QueryConstraint {
   return {
     _serialized: { type: "orderBy", fieldPath, direction },
   };
@@ -127,9 +130,7 @@ export function endBefore(...values: unknown[]): QueryConstraint {
 }
 
 /** AND複合フィルタを作成する */
-export function and(
-  ...constraints: QueryConstraint[]
-): QueryConstraint {
+export function and(...constraints: QueryConstraint[]): QueryConstraint {
   const filters = constraints.map((c) => c._serialized as SerializedWhereConstraint);
   return {
     _serialized: { type: "and", filters },
@@ -137,9 +138,7 @@ export function and(
 }
 
 /** OR複合フィルタを作成する */
-export function or(
-  ...constraints: QueryConstraint[]
-): QueryConstraint {
+export function or(...constraints: QueryConstraint[]): QueryConstraint {
   const filters = constraints.map((c) => c._serialized as SerializedWhereConstraint);
   return {
     _serialized: { type: "or", filters },
@@ -154,9 +153,7 @@ export function or(
 export async function getDocs<T = DocumentData>(
   queryOrRef: Query<T> | CollectionReference<T>,
 ): Promise<QuerySnapshot<T>> {
-  const q: Query<T> = queryOrRef.type === "collection"
-    ? query(queryOrRef)
-    : queryOrRef;
+  const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
 
   const transport = q._firestore._transport;
   const body: QueryRequest = {
@@ -170,13 +167,7 @@ export async function getDocs<T = DocumentData>(
   const docs = res.docs.map((d) => {
     const segments = d.path.split("/");
     const docId = segments[segments.length - 1];
-    return new QueryDocumentSnapshot<T>(
-      d.path,
-      docId,
-      d.data as T,
-      d.createTime,
-      d.updateTime,
-    );
+    return new QueryDocumentSnapshot<T>(d.path, docId, d.data as T, d.createTime, d.updateTime);
   });
 
   return new QuerySnapshot<T>(docs);

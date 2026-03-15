@@ -9,7 +9,9 @@ export function parseDocumentPath(path: string): {
 } {
   const segments = path.split("/");
   if (segments.length < 2 || segments.length % 2 !== 0) {
-    throw new Error(`Invalid document path: "${path}". Document paths must have an even number of segments.`);
+    throw new Error(
+      `Invalid document path: "${path}". Document paths must have an even number of segments.`,
+    );
   }
   return {
     collectionPath: segments.slice(0, -1).join("/"),

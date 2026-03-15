@@ -1,5 +1,5 @@
 import type { DocumentData } from "@local-firestore/shared";
-import type { Firestore, DocumentReference, CollectionReference } from "./types.js";
+import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 
 /**
  * ドキュメントリファレンスを取得する

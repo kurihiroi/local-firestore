@@ -1,6 +1,6 @@
+import type { ErrorResponse, QueryRequest, QueryResponse } from "@local-firestore/shared";
 import { Hono } from "hono";
 import type { QueryService } from "../services/query.js";
-import type { QueryRequest, QueryResponse, ErrorResponse } from "@local-firestore/shared";
 import { isCollectionPath } from "../utils/path.js";
 
 export function createQueryRoutes(queryService: QueryService): Hono {

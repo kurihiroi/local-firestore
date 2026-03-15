@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { createDatabase } from "../storage/sqlite.js";
+import type Database from "better-sqlite3";
+import { beforeEach, describe, expect, it } from "vitest";
 import { DocumentRepository } from "../storage/repository.js";
+import { createDatabase } from "../storage/sqlite.js";
 import { DocumentService } from "./document.js";
 import { QueryService } from "./query.js";
-import type Database from "better-sqlite3";
 
 describe("QueryService", () => {
   let db: Database.Database;
@@ -17,10 +17,30 @@ describe("QueryService", () => {
     queryService = new QueryService(db);
 
     // テストデータ投入
-    docService.setDocument("users/alice", { name: "Alice", age: 30, status: "active", tags: ["ts", "node"] });
-    docService.setDocument("users/bob", { name: "Bob", age: 25, status: "inactive", tags: ["python"] });
-    docService.setDocument("users/charlie", { name: "Charlie", age: 35, status: "active", tags: ["ts", "go"] });
-    docService.setDocument("users/dave", { name: "Dave", age: 28, status: "active", tags: ["node", "rust"] });
+    docService.setDocument("users/alice", {
+      name: "Alice",
+      age: 30,
+      status: "active",
+      tags: ["ts", "node"],
+    });
+    docService.setDocument("users/bob", {
+      name: "Bob",
+      age: 25,
+      status: "inactive",
+      tags: ["python"],
+    });
+    docService.setDocument("users/charlie", {
+      name: "Charlie",
+      age: 35,
+      status: "active",
+      tags: ["ts", "go"],
+    });
+    docService.setDocument("users/dave", {
+      name: "Dave",
+      age: 28,
+      status: "active",
+      tags: ["node", "rust"],
+    });
   });
 
   describe("基本クエリ", () => {

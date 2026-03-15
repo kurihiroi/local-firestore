@@ -1,13 +1,13 @@
-import type { DocumentData } from "@local-firestore/shared";
 import type {
   AddDocumentRequest,
   AddDocumentResponse,
+  DocumentData,
   GetDocumentResponse,
   SetDocumentRequest,
 } from "@local-firestore/shared";
-import type { DocumentReference, CollectionReference } from "./types.js";
-import { DocumentSnapshot } from "./types.js";
 import { doc } from "./references.js";
+import type { CollectionReference, DocumentReference } from "./types.js";
+import { DocumentSnapshot } from "./types.js";
 
 /** ドキュメントを取得する */
 export async function getDoc<T = DocumentData>(
@@ -58,9 +58,7 @@ export async function updateDoc<T = DocumentData>(
 }
 
 /** ドキュメントを削除する */
-export async function deleteDoc<T = DocumentData>(
-  reference: DocumentReference<T>,
-): Promise<void> {
+export async function deleteDoc<T = DocumentData>(reference: DocumentReference<T>): Promise<void> {
   const transport = reference._firestore._transport;
   await transport.delete(`/docs/${reference.path}`);
 }

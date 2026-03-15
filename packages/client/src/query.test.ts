@@ -1,20 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { getFirestore } from "./firestore.js";
-import { collection } from "./references.js";
 import {
-  query,
+  and,
   collectionGroup,
-  where,
-  orderBy,
-  limit,
-  limitToLast,
-  startAt,
-  startAfter,
   endAt,
   endBefore,
-  and,
+  limit,
+  limitToLast,
   or,
+  orderBy,
+  query,
+  startAfter,
+  startAt,
+  where,
 } from "./query.js";
+import { collection } from "./references.js";
 
 describe("query()", () => {
   const db = getFirestore();
@@ -29,12 +29,7 @@ describe("query()", () => {
   });
 
   it("制約を付与してQueryを作成できる", () => {
-    const q = query(
-      usersRef,
-      where("age", ">=", 18),
-      orderBy("age", "asc"),
-      limit(10),
-    );
+    const q = query(usersRef, where("age", ">=", 18), orderBy("age", "asc"), limit(10));
     expect(q.constraints).toHaveLength(3);
     expect(q.constraints[0]).toEqual({ type: "where", fieldPath: "age", op: ">=", value: 18 });
     expect(q.constraints[1]).toEqual({ type: "orderBy", fieldPath: "age", direction: "asc" });
@@ -45,7 +40,12 @@ describe("query()", () => {
     const q1 = query(usersRef, where("status", "==", "active"));
     const q2 = query(q1, orderBy("age"));
     expect(q2.constraints).toHaveLength(2);
-    expect(q2.constraints[0]).toEqual({ type: "where", fieldPath: "status", op: "==", value: "active" });
+    expect(q2.constraints[0]).toEqual({
+      type: "where",
+      fieldPath: "status",
+      op: "==",
+      value: "active",
+    });
     expect(q2.constraints[1]).toEqual({ type: "orderBy", fieldPath: "age", direction: "asc" });
   });
 });

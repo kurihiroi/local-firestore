@@ -1,4 +1,17 @@
 export type {
+  AddDocumentRequest,
+  AddDocumentResponse,
+  DeleteDocumentResponse,
+  ErrorResponse,
+  GetDocumentResponse,
+  QueryDocumentData,
+  QueryRequest,
+  QueryResponse,
+  SetDocumentRequest,
+  UpdateDocumentRequest,
+} from "./protocol.js";
+export { isFieldValueSentinel } from "./protocol.js";
+export type {
   DocumentData,
   DocumentMetadata,
   FieldValueSentinel,
@@ -16,18 +29,3 @@ export type {
   SetOptions,
   WhereFilterOp,
 } from "./types.js";
-
-export type {
-  AddDocumentRequest,
-  AddDocumentResponse,
-  DeleteDocumentResponse,
-  ErrorResponse,
-  GetDocumentResponse,
-  QueryDocumentData,
-  QueryRequest,
-  QueryResponse,
-  SetDocumentRequest,
-  UpdateDocumentRequest,
-} from "./protocol.js";
-
-export { isFieldValueSentinel } from "./protocol.js";

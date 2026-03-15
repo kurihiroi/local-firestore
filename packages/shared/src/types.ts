@@ -16,7 +16,12 @@ export interface SerializedTimestamp {
 }
 
 /** FieldValueセンチネルの種別 */
-export type FieldValueType = "serverTimestamp" | "deleteField" | "increment" | "arrayUnion" | "arrayRemove";
+export type FieldValueType =
+  | "serverTimestamp"
+  | "deleteField"
+  | "increment"
+  | "arrayUnion"
+  | "arrayRemove";
 
 /** FieldValueセンチネル（クライアント→サーバーで送信される） */
 export interface FieldValueSentinel {

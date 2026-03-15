@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { createDatabase } from "../storage/sqlite.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import { DocumentRepository } from "../storage/repository.js";
-import { DocumentService, DocumentNotFoundError } from "./document.js";
+import { createDatabase } from "../storage/sqlite.js";
+import { DocumentNotFoundError, DocumentService } from "./document.js";
 
 describe("DocumentService", () => {
   let service: DocumentService;
@@ -18,9 +18,9 @@ describe("DocumentService", () => {
 
       const doc = service.getDocument("users/alice");
       expect(doc).toBeDefined();
-      expect(doc!.data).toEqual({ name: "Alice", age: 30 });
-      expect(doc!.documentId).toBe("alice");
-      expect(doc!.collectionPath).toBe("users");
+      expect(doc?.data).toEqual({ name: "Alice", age: 30 });
+      expect(doc?.documentId).toBe("alice");
+      expect(doc?.collectionPath).toBe("users");
     });
 
     it("既存ドキュメントを上書きできる", () => {
@@ -28,8 +28,8 @@ describe("DocumentService", () => {
       service.setDocument("users/alice", { name: "Alice Updated", age: 31 });
 
       const doc = service.getDocument("users/alice");
-      expect(doc!.data).toEqual({ name: "Alice Updated", age: 31 });
-      expect(doc!.version).toBe(2);
+      expect(doc?.data).toEqual({ name: "Alice Updated", age: 31 });
+      expect(doc?.version).toBe(2);
     });
 
     it("存在しないドキュメントはundefinedを返す", () => {
@@ -42,8 +42,8 @@ describe("DocumentService", () => {
 
       const doc = service.getDocument("users/alice/posts/post1");
       expect(doc).toBeDefined();
-      expect(doc!.collectionPath).toBe("users/alice/posts");
-      expect(doc!.documentId).toBe("post1");
+      expect(doc?.collectionPath).toBe("users/alice/posts");
+      expect(doc?.documentId).toBe("post1");
     });
   });
 
@@ -63,7 +63,7 @@ describe("DocumentService", () => {
       service.updateDocument("users/alice", { age: 31 });
 
       const doc = service.getDocument("users/alice");
-      expect(doc!.data).toEqual({ name: "Alice", age: 31 });
+      expect(doc?.data).toEqual({ name: "Alice", age: 31 });
     });
 
     it("存在しないドキュメントの更新はエラーになる", () => {
@@ -98,7 +98,7 @@ describe("DocumentService", () => {
       const after = Math.floor(Date.now() / 1000);
 
       const doc = service.getDocument("users/alice");
-      const ts = doc!.data.createdAt as { __type: string; value: { seconds: number } };
+      const ts = doc?.data.createdAt as { __type: string; value: { seconds: number } };
       expect(ts.__type).toBe("timestamp");
       expect(ts.value.seconds).toBeGreaterThanOrEqual(before);
       expect(ts.value.seconds).toBeLessThanOrEqual(after);
@@ -111,8 +111,8 @@ describe("DocumentService", () => {
       });
 
       const doc = service.getDocument("users/alice");
-      expect(doc!.data).toEqual({ name: "Alice" });
-      expect(doc!.data.age).toBeUndefined();
+      expect(doc?.data).toEqual({ name: "Alice" });
+      expect(doc?.data.age).toBeUndefined();
     });
 
     it("incrementでフィールド値が加算される", () => {
@@ -122,7 +122,7 @@ describe("DocumentService", () => {
       });
 
       const doc = service.getDocument("users/alice");
-      expect(doc!.data.score).toBe(15);
+      expect(doc?.data.score).toBe(15);
     });
 
     it("arrayUnionで配列にユニーク要素が追加される", () => {
@@ -132,7 +132,7 @@ describe("DocumentService", () => {
       });
 
       const doc = service.getDocument("users/alice");
-      expect(doc!.data.tags).toEqual(["a", "b", "c"]);
+      expect(doc?.data.tags).toEqual(["a", "b", "c"]);
     });
 
     it("arrayRemoveで配列から要素が除去される", () => {
@@ -142,7 +142,7 @@ describe("DocumentService", () => {
       });
 
       const doc = service.getDocument("users/alice");
-      expect(doc!.data.tags).toEqual(["a", "c"]);
+      expect(doc?.data.tags).toEqual(["a", "c"]);
     });
   });
 });

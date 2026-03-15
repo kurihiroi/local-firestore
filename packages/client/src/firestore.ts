@@ -1,5 +1,5 @@
-import type { Firestore } from "./types.js";
 import { HttpTransport } from "./transport.js";
+import type { Firestore } from "./types.js";
 
 export interface FirestoreSettings {
   host?: string;
