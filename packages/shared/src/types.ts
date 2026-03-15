@@ -118,3 +118,21 @@ export interface SerializedCompositeFilterConstraint {
   type: "and" | "or";
   filters: SerializedWhereConstraint[];
 }
+
+// ============================================================
+// 集計クエリ関連型
+// ============================================================
+
+/** 集計の種別 */
+export type AggregateType = "count" | "sum" | "avg";
+
+/** シリアライズされた集計フィールド指定 */
+export interface SerializedAggregateField {
+  aggregateType: AggregateType;
+  fieldPath?: string;
+}
+
+/** 集計スペック（エイリアス名 → 集計フィールド指定） */
+export interface SerializedAggregateSpec {
+  [alias: string]: SerializedAggregateField;
+}

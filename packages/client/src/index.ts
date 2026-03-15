@@ -1,4 +1,15 @@
 export type { DocumentData } from "@local-firestore/shared";
+// Aggregate
+export type { AggregateSpec, AggregateSpecData } from "./aggregate.js";
+export {
+  AggregateField,
+  AggregateQuerySnapshot,
+  average,
+  count,
+  getAggregateFromServer,
+  getCountFromServer,
+  sum,
+} from "./aggregate.js";
 // Batch & Transaction
 export { WriteBatch, writeBatch } from "./batch.js";
 // CRUD operations
