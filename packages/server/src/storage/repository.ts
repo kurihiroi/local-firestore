@@ -1,5 +1,5 @@
-import type Database from "better-sqlite3";
 import type { DocumentData, DocumentMetadata } from "@local-firestore/shared";
+import type Database from "better-sqlite3";
 
 export class DocumentRepository {
   private stmts: {
@@ -10,7 +10,7 @@ export class DocumentRepository {
     listCollection: Database.Statement;
   };
 
-  constructor(private db: Database.Database) {
+  constructor(db: Database.Database) {
     this.stmts = {
       get: db.prepare("SELECT * FROM documents WHERE path = ?"),
       insert: db.prepare(`

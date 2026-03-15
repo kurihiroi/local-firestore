@@ -9,6 +9,19 @@
 
 ---
 
+## 暫定的な緩和事項（完成時に修正予定）
+
+以下の項目は開発初期フェーズにおいて一時的に緩和している。全Phase完了時に厳格化する。
+
+| 項目 | 現在の状態 | 完成時の対応 |
+|---|---|---|
+| Biome `noNonNullAssertion` | `off` | `error` に戻す。テストコードでは型ガード付きアサーションに置き換える |
+| Biome `noUnusedPrivateClassMembers` | `off` | `error` に戻す。不要なprivateメンバーを削除する |
+| 未使用ジェネリクス型パラメータ（`Query<T>`, `CollectionReference<T>`） | `biome-ignore` で抑制 | 型パラメータを実際に使用する実装を入れた上で `biome-ignore` を削除する |
+| TypeScript `composite` / project references | 未使用（tsconfig.jsonから削除済み） | 全パッケージのビルドが安定したら再導入を検討する |
+
+---
+
 ## 全体構成
 
 ```

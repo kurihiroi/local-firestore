@@ -1,4 +1,9 @@
-import type { DocumentData, FieldValueSentinel, SetOptions } from "./types.js";
+import type {
+  DocumentData,
+  FieldValueSentinel,
+  SerializedQueryConstraint,
+  SetOptions,
+} from "./types.js";
 
 // ============================================================
 // HTTP Request / Response
@@ -39,6 +44,25 @@ export interface UpdateDocumentRequest {
 /** DELETE /docs/:path レスポンス */
 export interface DeleteDocumentResponse {
   success: boolean;
+}
+
+/** POST /query リクエスト */
+export interface QueryRequest {
+  collectionPath: string;
+  collectionGroup?: boolean;
+  constraints: SerializedQueryConstraint[];
+}
+
+/** POST /query レスポンス */
+export interface QueryResponse {
+  docs: QueryDocumentData[];
+}
+
+export interface QueryDocumentData {
+  path: string;
+  data: DocumentData;
+  createTime: string;
+  updateTime: string;
 }
 
 /** エラーレスポンス */

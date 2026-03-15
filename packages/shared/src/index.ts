@@ -1,21 +1,31 @@
 export type {
-  DocumentData,
-  DocumentMetadata,
-  FieldValueSentinel,
-  FieldValueType,
-  SerializedSpecialValue,
-  SerializedTimestamp,
-  SetOptions,
-} from "./types.js";
-
-export type {
   AddDocumentRequest,
   AddDocumentResponse,
   DeleteDocumentResponse,
   ErrorResponse,
   GetDocumentResponse,
+  QueryDocumentData,
+  QueryRequest,
+  QueryResponse,
   SetDocumentRequest,
   UpdateDocumentRequest,
 } from "./protocol.js";
-
 export { isFieldValueSentinel } from "./protocol.js";
+export type {
+  DocumentData,
+  DocumentMetadata,
+  FieldValueSentinel,
+  FieldValueType,
+  OrderByDirection,
+  QueryConstraintType,
+  SerializedCompositeFilterConstraint,
+  SerializedCursorConstraint,
+  SerializedLimitConstraint,
+  SerializedOrderByConstraint,
+  SerializedQueryConstraint,
+  SerializedSpecialValue,
+  SerializedTimestamp,
+  SerializedWhereConstraint,
+  SetOptions,
+  WhereFilterOp,
+} from "./types.js";

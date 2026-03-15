@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
-import { createDatabase } from "./storage/sqlite.js";
 import { createApp } from "./app.js";
+import { createDatabase } from "./storage/sqlite.js";
 
 const port = Number(process.env.PORT) || 8080;
 const dbPath = process.env.DB_PATH || "local-firestore.db";

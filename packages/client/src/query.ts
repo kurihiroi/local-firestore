@@ -1,0 +1,174 @@
+import type {
+  DocumentData,
+  OrderByDirection,
+  QueryRequest,
+  QueryResponse,
+  SerializedQueryConstraint,
+  SerializedWhereConstraint,
+  WhereFilterOp,
+} from "@local-firestore/shared";
+import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
+import type { CollectionReference, Firestore } from "./types.js";
+
+// ============================================================
+// Query型
+// ============================================================
+
+// biome-ignore lint/correctness/noUnusedVariables: 将来のPhaseで型パラメータとして使用予定
+export interface Query<T = DocumentData> {
+  readonly type: "query";
+  readonly collectionPath: string;
+  readonly collectionGroup: boolean;
+  readonly constraints: SerializedQueryConstraint[];
+  /** @internal */
+  readonly _firestore: Firestore;
+}
+
+// ============================================================
+// クエリ制約
+// ============================================================
+
+export interface QueryConstraint {
+  readonly _serialized: SerializedQueryConstraint;
+}
+
+/** クエリを構築する */
+export function query<T = DocumentData>(
+  ref: CollectionReference<T> | Query<T>,
+  ...constraints: QueryConstraint[]
+): Query<T> {
+  const base =
+    ref.type === "collection"
+      ? {
+          collectionPath: ref.path,
+          collectionGroup: false,
+          constraints: [] as SerializedQueryConstraint[],
+        }
+      : {
+          collectionPath: ref.collectionPath,
+          collectionGroup: ref.collectionGroup,
+          constraints: [...ref.constraints],
+        };
+
+  return {
+    type: "query",
+    collectionPath: base.collectionPath,
+    collectionGroup: base.collectionGroup,
+    constraints: [...base.constraints, ...constraints.map((c) => c._serialized)],
+    _firestore: ref._firestore,
+  };
+}
+
+/** コレクショングループクエリを作成する */
+export function collectionGroup<T = DocumentData>(
+  firestore: Firestore,
+  collectionId: string,
+): Query<T> {
+  return {
+    type: "query",
+    collectionPath: collectionId,
+    collectionGroup: true,
+    constraints: [],
+    _firestore: firestore,
+  };
+}
+
+/** whereフィルタ制約を作成する */
+export function where(fieldPath: string, op: WhereFilterOp, value: unknown): QueryConstraint {
+  return {
+    _serialized: { type: "where", fieldPath, op, value },
+  };
+}
+
+/** orderBy制約を作成する */
+export function orderBy(fieldPath: string, direction: OrderByDirection = "asc"): QueryConstraint {
+  return {
+    _serialized: { type: "orderBy", fieldPath, direction },
+  };
+}
+
+/** limit制約を作成する */
+export function limit(n: number): QueryConstraint {
+  return {
+    _serialized: { type: "limit", limit: n },
+  };
+}
+
+/** limitToLast制約を作成する */
+export function limitToLast(n: number): QueryConstraint {
+  return {
+    _serialized: { type: "limitToLast", limit: n },
+  };
+}
+
+/** startAtカーソル制約を作成する */
+export function startAt(...values: unknown[]): QueryConstraint {
+  return {
+    _serialized: { type: "startAt", values },
+  };
+}
+
+/** startAfterカーソル制約を作成する */
+export function startAfter(...values: unknown[]): QueryConstraint {
+  return {
+    _serialized: { type: "startAfter", values },
+  };
+}
+
+/** endAtカーソル制約を作成する */
+export function endAt(...values: unknown[]): QueryConstraint {
+  return {
+    _serialized: { type: "endAt", values },
+  };
+}
+
+/** endBeforeカーソル制約を作成する */
+export function endBefore(...values: unknown[]): QueryConstraint {
+  return {
+    _serialized: { type: "endBefore", values },
+  };
+}
+
+/** AND複合フィルタを作成する */
+export function and(...constraints: QueryConstraint[]): QueryConstraint {
+  const filters = constraints.map((c) => c._serialized as SerializedWhereConstraint);
+  return {
+    _serialized: { type: "and", filters },
+  };
+}
+
+/** OR複合フィルタを作成する */
+export function or(...constraints: QueryConstraint[]): QueryConstraint {
+  const filters = constraints.map((c) => c._serialized as SerializedWhereConstraint);
+  return {
+    _serialized: { type: "or", filters },
+  };
+}
+
+// ============================================================
+// getDocs
+// ============================================================
+
+/** クエリを実行してドキュメント一覧を取得する */
+export async function getDocs<T = DocumentData>(
+  queryOrRef: Query<T> | CollectionReference<T>,
+): Promise<QuerySnapshot<T>> {
+  const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
+
+  const transport = q._firestore._transport;
+  const body: QueryRequest = {
+    collectionPath: q.collectionPath,
+    collectionGroup: q.collectionGroup,
+    constraints: q.constraints,
+  };
+
+  const res = await transport.post<QueryResponse>("/query", body);
+
+  const docs = res.docs.map((d) => {
+    const segments = d.path.split("/");
+    const docId = segments[segments.length - 1];
+    return new QueryDocumentSnapshot<T>(d.path, docId, d.data as T, d.createTime, d.updateTime);
+  });
+
+  return new QuerySnapshot<T>(docs);
+}

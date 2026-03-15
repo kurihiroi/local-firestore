@@ -19,6 +19,7 @@ export interface DocumentReference<T = DocumentData> {
 }
 
 /** コレクションリファレンス */
+// biome-ignore lint/correctness/noUnusedVariables: 将来のPhaseで型パラメータとして使用予定
 export interface CollectionReference<T = DocumentData> {
   readonly type: "collection";
   readonly id: string;

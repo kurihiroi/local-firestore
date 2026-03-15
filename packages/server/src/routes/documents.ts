@@ -1,16 +1,16 @@
+import type {
+  AddDocumentRequest,
+  AddDocumentResponse,
+  DeleteDocumentResponse,
+  ErrorResponse,
+  GetDocumentResponse,
+  SetDocumentRequest,
+  UpdateDocumentRequest,
+} from "@local-firestore/shared";
 import { Hono } from "hono";
 import type { DocumentService } from "../services/document.js";
 import { DocumentNotFoundError } from "../services/document.js";
 import { isCollectionPath, isDocumentPath } from "../utils/path.js";
-import type {
-  AddDocumentRequest,
-  AddDocumentResponse,
-  GetDocumentResponse,
-  SetDocumentRequest,
-  UpdateDocumentRequest,
-  DeleteDocumentResponse,
-  ErrorResponse,
-} from "@local-firestore/shared";
 
 export function createDocumentRoutes(documentService: DocumentService): Hono {
   const app = new Hono();
@@ -19,7 +19,10 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
   app.get("/docs/*", (c) => {
     const path = c.req.path.replace("/docs/", "");
     if (!isDocumentPath(path)) {
-      return c.json<ErrorResponse>({ code: "invalid-argument", message: "Invalid document path" }, 400);
+      return c.json<ErrorResponse>(
+        { code: "invalid-argument", message: "Invalid document path" },
+        400,
+      );
     }
 
     const doc = documentService.getDocument(path);
@@ -55,7 +58,10 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
   app.put("/docs/*", async (c) => {
     const path = c.req.path.replace("/docs/", "");
     if (!isDocumentPath(path)) {
-      return c.json<ErrorResponse>({ code: "invalid-argument", message: "Invalid document path" }, 400);
+      return c.json<ErrorResponse>(
+        { code: "invalid-argument", message: "Invalid document path" },
+        400,
+      );
     }
 
     const body = await c.req.json<SetDocumentRequest>();
@@ -67,7 +73,10 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
   app.patch("/docs/*", async (c) => {
     const path = c.req.path.replace("/docs/", "");
     if (!isDocumentPath(path)) {
-      return c.json<ErrorResponse>({ code: "invalid-argument", message: "Invalid document path" }, 400);
+      return c.json<ErrorResponse>(
+        { code: "invalid-argument", message: "Invalid document path" },
+        400,
+      );
     }
 
     try {
@@ -86,7 +95,10 @@ export function createDocumentRoutes(documentService: DocumentService): Hono {
   app.delete("/docs/*", (c) => {
     const path = c.req.path.replace("/docs/", "");
     if (!isDocumentPath(path)) {
-      return c.json<ErrorResponse>({ code: "invalid-argument", message: "Invalid document path" }, 400);
+      return c.json<ErrorResponse>(
+        { code: "invalid-argument", message: "Invalid document path" },
+        400,
+      );
     }
 
     documentService.deleteDocument(path);
