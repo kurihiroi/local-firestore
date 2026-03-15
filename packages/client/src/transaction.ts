@@ -4,8 +4,10 @@ import type {
   GetDocumentResponse,
   TransactionBeginResponse,
   TransactionCommitResponse,
+  WithFieldValue,
 } from "@local-firestore/shared";
 import { ERROR_CODES } from "@local-firestore/shared";
+import { QueryDocumentSnapshot } from "./snapshots.js";
 import type { DocumentReference, Firestore } from "./types.js";
 import { DocumentSnapshot } from "./types.js";
 
@@ -68,6 +70,18 @@ export class Transaction {
       path: ref.path,
     });
 
+    if (res.exists && ref._converter) {
+      const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+        ref.path,
+        ref.id,
+        res.data as DocumentData,
+        res.createTime ?? "",
+        res.updateTime ?? "",
+      );
+      const converted = ref._converter.fromFirestore(rawSnapshot);
+      return new DocumentSnapshot<T>(ref, converted as T, res.createTime, res.updateTime);
+    }
+
     return new DocumentSnapshot<T>(
       ref,
       res.exists ? (res.data as T) : null,
@@ -76,11 +90,12 @@ export class Transaction {
     );
   }
 
-  set<T = DocumentData>(ref: DocumentReference<T>, data: T): this {
+  set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this {
+    const dbData = ref._converter ? ref._converter.toFirestore(data) : data;
     this.operations.push({
       type: "set",
       path: ref.path,
-      data: data as DocumentData,
+      data: dbData as DocumentData,
     });
     return this;
   }

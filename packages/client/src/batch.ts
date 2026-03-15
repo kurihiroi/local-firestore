@@ -1,4 +1,9 @@
-import type { BatchOperation, BatchResponse, DocumentData } from "@local-firestore/shared";
+import type {
+  BatchOperation,
+  BatchResponse,
+  DocumentData,
+  WithFieldValue,
+} from "@local-firestore/shared";
 import type { DocumentReference, Firestore } from "./types.js";
 
 /** WriteBatchオブジェクトを作成する */
@@ -18,12 +23,13 @@ export class WriteBatch {
     }
   }
 
-  set<T = DocumentData>(ref: DocumentReference<T>, data: T): this {
+  set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this {
     this.ensureNotCommitted();
+    const dbData = ref._converter ? ref._converter.toFirestore(data) : data;
     this.operations.push({
       type: "set",
       path: ref.path,
-      data: data as DocumentData,
+      data: dbData as DocumentData,
     });
     return this;
   }

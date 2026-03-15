@@ -39,7 +39,9 @@ export type {
   DocumentMetadata,
   FieldValueSentinel,
   FieldValueType,
+  FirestoreDataConverter,
   OrderByDirection,
+  PartialWithFieldValue,
   QueryConstraintType,
   SerializedAggregateField,
   SerializedAggregateSpec,
@@ -53,5 +55,6 @@ export type {
   SerializedWhereConstraint,
   SetOptions,
   WhereFilterOp,
+  WithFieldValue,
 } from "./types.js";
 export { ERROR_CODES } from "./types.js";

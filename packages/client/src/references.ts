@@ -1,4 +1,4 @@
-import type { DocumentData } from "@local-firestore/shared";
+import type { DocumentData, FirestoreDataConverter } from "@local-firestore/shared";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 
 /**
@@ -66,11 +66,13 @@ export function collection<T = DocumentData>(
   return createCollectionReference<T>(parent._firestore, resolvedPath, parent);
 }
 
-function createDocumentReference<T>(
+/** @internal */
+export function createDocumentReference<T>(
   firestore: Firestore,
   path: string,
   docId: string,
   parent: CollectionReference<T>,
+  converter: FirestoreDataConverter<T> | null = null,
 ): DocumentReference<T> {
   return {
     type: "document",
@@ -78,13 +80,33 @@ function createDocumentReference<T>(
     path,
     parent,
     _firestore: firestore,
+    _converter: converter,
+    withConverter<U>(c: FirestoreDataConverter<U> | null) {
+      if (c === null) {
+        return createDocumentReference<DocumentData>(
+          firestore,
+          path,
+          docId,
+          createCollectionReference<DocumentData>(firestore, parent.path, parent.parent),
+        );
+      }
+      return createDocumentReference<U>(
+        firestore,
+        path,
+        docId,
+        createCollectionReference<U>(firestore, parent.path, parent.parent, c),
+        c,
+      );
+    },
   };
 }
 
-function createCollectionReference<T>(
+/** @internal */
+export function createCollectionReference<T>(
   firestore: Firestore,
   path: string,
   parentDoc?: DocumentReference | null,
+  converter: FirestoreDataConverter<T> | null = null,
 ): CollectionReference<T> {
   const segments = path.split("/");
   const collId = segments[segments.length - 1];
@@ -94,5 +116,12 @@ function createCollectionReference<T>(
     path,
     parent: parentDoc ?? null,
     _firestore: firestore,
+    _converter: converter,
+    withConverter<U>(c: FirestoreDataConverter<U> | null) {
+      if (c === null) {
+        return createCollectionReference<DocumentData>(firestore, path, parentDoc);
+      }
+      return createCollectionReference<U>(firestore, path, parentDoc, c);
+    },
   };
 }

@@ -1,4 +1,8 @@
-import type { DocumentData, SerializedTimestamp } from "@local-firestore/shared";
+import type {
+  DocumentData,
+  FirestoreDataConverter,
+  SerializedTimestamp,
+} from "@local-firestore/shared";
 import type { HttpTransport } from "./transport.js";
 
 /** Firestoreインスタンス */
@@ -16,10 +20,15 @@ export interface DocumentReference<T = DocumentData> {
   readonly parent: CollectionReference<T>;
   /** @internal */
   readonly _firestore: Firestore;
+  /** @internal */
+  readonly _converter: FirestoreDataConverter<T> | null;
+
+  /** データコンバーターを設定した新しいリファレンスを返す */
+  withConverter<U>(converter: FirestoreDataConverter<U>): DocumentReference<U>;
+  withConverter(converter: null): DocumentReference<DocumentData>;
 }
 
 /** コレクションリファレンス */
-// biome-ignore lint/correctness/noUnusedVariables: 将来のPhaseで型パラメータとして使用予定
 export interface CollectionReference<T = DocumentData> {
   readonly type: "collection";
   readonly id: string;
@@ -27,6 +36,12 @@ export interface CollectionReference<T = DocumentData> {
   readonly parent: DocumentReference | null;
   /** @internal */
   readonly _firestore: Firestore;
+  /** @internal */
+  readonly _converter: FirestoreDataConverter<T> | null;
+
+  /** データコンバーターを設定した新しいリファレンスを返す */
+  withConverter<U>(converter: FirestoreDataConverter<U>): CollectionReference<U>;
+  withConverter(converter: null): CollectionReference<DocumentData>;
 }
 
 /** ドキュメントスナップショット */
