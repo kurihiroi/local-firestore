@@ -1,6 +1,7 @@
 import type {
   DocumentData,
   FieldValueSentinel,
+  SerializedAggregateSpec,
   SerializedQueryConstraint,
   SetOptions,
 } from "./types.js";
@@ -63,6 +64,28 @@ export interface QueryDocumentData {
   data: DocumentData;
   createTime: string;
   updateTime: string;
+}
+
+// ============================================================
+// Aggregate
+// ============================================================
+
+/** POST /aggregate リクエスト */
+export interface AggregateRequest {
+  collectionPath: string;
+  collectionGroup?: boolean;
+  constraints: SerializedQueryConstraint[];
+  aggregateSpec: SerializedAggregateSpec;
+}
+
+/** POST /aggregate レスポンス */
+export interface AggregateResponse {
+  data: AggregateResultData;
+}
+
+/** 集計結果データ（エイリアス名 → 集計値） */
+export interface AggregateResultData {
+  [alias: string]: number | null;
 }
 
 // ============================================================

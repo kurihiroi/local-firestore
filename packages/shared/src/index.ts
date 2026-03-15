@@ -1,6 +1,9 @@
 export type {
   AddDocumentRequest,
   AddDocumentResponse,
+  AggregateRequest,
+  AggregateResponse,
+  AggregateResultData,
   BatchOperation,
   BatchOperationType,
   BatchRequest,
@@ -31,12 +34,15 @@ export type {
 } from "./protocol.js";
 export { isFieldValueSentinel } from "./protocol.js";
 export type {
+  AggregateType,
   DocumentData,
   DocumentMetadata,
   FieldValueSentinel,
   FieldValueType,
   OrderByDirection,
   QueryConstraintType,
+  SerializedAggregateField,
+  SerializedAggregateSpec,
   SerializedCompositeFilterConstraint,
   SerializedCursorConstraint,
   SerializedLimitConstraint,
