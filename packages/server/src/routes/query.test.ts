@@ -1,3 +1,4 @@
+import type { QueryResponse } from "@local-firestore/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 import { createDatabase } from "../storage/sqlite.js";
@@ -32,9 +33,8 @@ describe("Query Routes", () => {
     });
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: テスト用ヘルパー
-  async function jsonBody(res: Response): Promise<any> {
-    return res.json();
+  async function jsonBody<T = Record<string, unknown>>(res: Response): Promise<T> {
+    return res.json() as Promise<T>;
   }
 
   it("全ドキュメントを取得できる", async () => {
@@ -61,10 +61,10 @@ describe("Query Routes", () => {
         { type: "limit", limit: 2 },
       ],
     });
-    const body = await jsonBody(res);
+    const body = await jsonBody<QueryResponse>(res);
     expect(body.docs).toHaveLength(2);
-    expect(body.docs[0].data.name).toBe("Bob");
-    expect(body.docs[1].data.name).toBe("Alice");
+    expect((body.docs[0].data as Record<string, unknown>).name).toBe("Bob");
+    expect((body.docs[1].data as Record<string, unknown>).name).toBe("Alice");
   });
 
   it("不正なコレクションパスで400を返す", async () => {

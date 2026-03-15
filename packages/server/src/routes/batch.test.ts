@@ -1,3 +1,4 @@
+import type { GetDocumentResponse, TransactionBeginResponse } from "@local-firestore/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 import { createDatabase } from "../storage/sqlite.js";
@@ -19,9 +20,8 @@ describe("Batch & Transaction Routes", () => {
     return app.request(path, init);
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: テスト用ヘルパー
-  async function jsonBody(res: Response): Promise<any> {
-    return res.json();
+  async function jsonBody<T = Record<string, unknown>>(res: Response): Promise<T> {
+    return res.json() as Promise<T>;
   }
 
   describe("POST /batch", () => {
@@ -35,9 +35,9 @@ describe("Batch & Transaction Routes", () => {
       expect(res.status).toBe(200);
 
       const alice = await request("GET", "/docs/users/alice");
-      const aliceBody = await jsonBody(alice);
+      const aliceBody = await jsonBody<GetDocumentResponse>(alice);
       expect(aliceBody.exists).toBe(true);
-      expect(aliceBody.data.name).toBe("Alice");
+      expect(aliceBody.data!.name).toBe("Alice");
     });
   });
 
@@ -50,7 +50,7 @@ describe("Batch & Transaction Routes", () => {
 
       // begin
       const beginRes = await request("POST", "/transaction/begin");
-      const { transactionId } = await jsonBody(beginRes);
+      const { transactionId } = await jsonBody<TransactionBeginResponse>(beginRes);
       expect(transactionId).toHaveLength(20);
 
       // get
@@ -58,9 +58,9 @@ describe("Batch & Transaction Routes", () => {
         transactionId,
         path: "users/alice",
       });
-      const getBody = await jsonBody(getRes);
+      const getBody = await jsonBody<GetDocumentResponse>(getRes);
       expect(getBody.exists).toBe(true);
-      expect(getBody.data.balance).toBe(100);
+      expect((getBody.data as Record<string, unknown>).balance).toBe(100);
 
       // commit
       const commitRes = await request("POST", "/transaction/commit", {
@@ -71,8 +71,8 @@ describe("Batch & Transaction Routes", () => {
 
       // 確認
       const checkRes = await request("GET", "/docs/users/alice");
-      const checkBody = await jsonBody(checkRes);
-      expect(checkBody.data.balance).toBe(80);
+      const checkBody = await jsonBody<GetDocumentResponse>(checkRes);
+      expect((checkBody.data as Record<string, unknown>).balance).toBe(80);
     });
 
     it("コンフリクト時に409を返す", async () => {
@@ -82,7 +82,7 @@ describe("Batch & Transaction Routes", () => {
 
       // トランザクション開始 & 読み取り
       const beginRes = await request("POST", "/transaction/begin");
-      const { transactionId } = await jsonBody(beginRes);
+      const { transactionId } = await jsonBody<TransactionBeginResponse>(beginRes);
       await request("POST", "/transaction/get", {
         transactionId,
         path: "users/alice",
@@ -103,7 +103,7 @@ describe("Batch & Transaction Routes", () => {
 
     it("rollbackでトランザクションを破棄できる", async () => {
       const beginRes = await request("POST", "/transaction/begin");
-      const { transactionId } = await jsonBody(beginRes);
+      const { transactionId } = await jsonBody<TransactionBeginResponse>(beginRes);
 
       const rollbackRes = await request("POST", "/transaction/rollback", {
         transactionId,

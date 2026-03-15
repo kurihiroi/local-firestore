@@ -76,16 +76,17 @@ export function createBatchRoutes(transactionService: TransactionService): Hono 
   return app;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Honoのcontext型
-function handleError(c: any, e: unknown) {
+import type { Context } from "hono";
+
+function handleError(c: Context, e: unknown) {
   if (e instanceof TransactionConflictError) {
-    return c.json({ code: e.code, message: e.message }, 409);
+    return c.json<ErrorResponse>({ code: e.code, message: e.message }, 409);
   }
   if (e instanceof TransactionNotFoundError) {
-    return c.json({ code: e.code, message: e.message }, 404);
+    return c.json<ErrorResponse>({ code: e.code, message: e.message }, 404);
   }
   if (e instanceof TransactionExpiredError) {
-    return c.json({ code: e.code, message: e.message }, 408);
+    return c.json<ErrorResponse>({ code: e.code, message: e.message }, 408);
   }
   throw e;
 }

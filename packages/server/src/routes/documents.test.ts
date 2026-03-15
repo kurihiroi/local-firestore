@@ -19,9 +19,8 @@ describe("Document Routes", () => {
     return app.request(path, init);
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: テスト用ヘルパー
-  async function jsonBody(res: Response): Promise<any> {
-    return res.json();
+  async function jsonBody<T = Record<string, unknown>>(res: Response): Promise<T> {
+    return res.json() as Promise<T>;
   }
 
   describe("GET /health", () => {
