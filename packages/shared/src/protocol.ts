@@ -126,6 +126,79 @@ export interface ErrorResponse {
 }
 
 // ============================================================
+// WebSocket メッセージ（リアルタイムリスナー）
+// ============================================================
+
+/** クライアント → サーバー: ドキュメントリスナー登録 */
+export interface SubscribeDocMessage {
+  type: "subscribe_doc";
+  subscriptionId: string;
+  path: string;
+}
+
+/** クライアント → サーバー: クエリリスナー登録 */
+export interface SubscribeQueryMessage {
+  type: "subscribe_query";
+  subscriptionId: string;
+  collectionPath: string;
+  collectionGroup?: boolean;
+  constraints: SerializedQueryConstraint[];
+}
+
+/** クライアント → サーバー: リスナー解除 */
+export interface UnsubscribeMessage {
+  type: "unsubscribe";
+  subscriptionId: string;
+}
+
+/** クライアント → サーバー のメッセージ型 */
+export type ClientMessage = SubscribeDocMessage | SubscribeQueryMessage | UnsubscribeMessage;
+
+/** ドキュメント変更種別 */
+export type DocumentChangeType = "added" | "modified" | "removed";
+
+/** ドキュメント変更情報 */
+export interface DocumentChangeData {
+  type: DocumentChangeType;
+  path: string;
+  data: DocumentData | null;
+  createTime: string | null;
+  updateTime: string | null;
+  oldIndex: number;
+  newIndex: number;
+}
+
+/** サーバー → クライアント: ドキュメントスナップショット通知 */
+export interface DocSnapshotMessage {
+  type: "doc_snapshot";
+  subscriptionId: string;
+  exists: boolean;
+  path: string;
+  data: DocumentData | null;
+  createTime: string | null;
+  updateTime: string | null;
+}
+
+/** サーバー → クライアント: クエリスナップショット通知 */
+export interface QuerySnapshotMessage {
+  type: "query_snapshot";
+  subscriptionId: string;
+  docs: QueryDocumentData[];
+  changes: DocumentChangeData[];
+}
+
+/** サーバー → クライアント: エラー通知 */
+export interface SnapshotErrorMessage {
+  type: "error";
+  subscriptionId: string;
+  code: string;
+  message: string;
+}
+
+/** サーバー → クライアント のメッセージ型 */
+export type ServerMessage = DocSnapshotMessage | QuerySnapshotMessage | SnapshotErrorMessage;
+
+// ============================================================
 // FieldValueの判定ヘルパー
 // ============================================================
 

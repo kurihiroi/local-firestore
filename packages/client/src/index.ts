@@ -13,6 +13,9 @@ export {
 } from "./field-values.js";
 export type { FirestoreSettings } from "./firestore.js";
 export { getFirestore } from "./firestore.js";
+// Real-time listeners
+export type { DocumentChange, DocumentChangeType, Unsubscribe } from "./listener.js";
+export { onSnapshot } from "./listener.js";
 export type { Query, QueryConstraint } from "./query.js";
 // Query operations
 export {

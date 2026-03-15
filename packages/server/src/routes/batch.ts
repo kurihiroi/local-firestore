@@ -18,7 +18,10 @@ import {
   TransactionNotFoundError,
 } from "../services/transaction.js";
 
-export function createBatchRoutes(transactionService: TransactionService): Hono {
+export function createBatchRoutes(
+  transactionService: TransactionService,
+  onDocumentChange?: (path: string) => void,
+): Hono {
   const app = new Hono();
 
   // POST /batch - バッチ書き込み
@@ -26,6 +29,11 @@ export function createBatchRoutes(transactionService: TransactionService): Hono 
     const body = await c.req.json<BatchRequest>();
     try {
       transactionService.executeBatch(body.operations);
+      if (onDocumentChange) {
+        for (const op of body.operations) {
+          onDocumentChange(op.path);
+        }
+      }
       return c.json<BatchResponse>({ success: true });
     } catch (e) {
       return handleError(c, e);
@@ -61,6 +69,11 @@ export function createBatchRoutes(transactionService: TransactionService): Hono 
     const body = await c.req.json<TransactionCommitRequest>();
     try {
       transactionService.commit(body.transactionId, body.operations);
+      if (onDocumentChange) {
+        for (const op of body.operations) {
+          onDocumentChange(op.path);
+        }
+      }
       return c.json<TransactionCommitResponse>({ success: true });
     } catch (e) {
       return handleError(c, e);
