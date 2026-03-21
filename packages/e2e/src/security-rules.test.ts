@@ -207,6 +207,94 @@ describe("E2E: Security rules", () => {
     });
   });
 
+  describe("request.resource.data validation rules", () => {
+    let ctx: TestContext;
+    const rules: SecurityRules = {
+      rules: {
+        validated: {
+          read: true,
+          create: "request.resource.data.name is string && request.resource.data.name.size() > 0",
+        },
+      },
+    };
+
+    beforeAll(async () => {
+      ctx = await startTestServer({ securityRules: rules });
+    });
+
+    afterAll(async () => {
+      await ctx.cleanup();
+    });
+
+    it("T11.4: request.resource.data should validate write data", async () => {
+      // Valid: name is a non-empty string
+      const valid = await fetchWithAuth(ctx.port, "PUT", "/docs/validated/doc1", {
+        data: { name: "Valid" },
+      });
+      expect(valid.status).toBe(200);
+
+      // Invalid: name is empty string
+      const invalid = await fetchWithAuth(ctx.port, "PUT", "/docs/validated/doc2", {
+        data: { name: "" },
+      });
+      expect(invalid.status).toBe(403);
+    });
+  });
+
+  describe("resource.data existing document rules", () => {
+    let ctx: TestContext;
+    const rules: SecurityRules = {
+      rules: {
+        lockable: {
+          read: true,
+          create: true,
+          update: "resource.data.locked != true",
+          delete: "resource.data.locked != true",
+        },
+      },
+    };
+
+    beforeAll(async () => {
+      ctx = await startTestServer({ securityRules: rules });
+    });
+
+    afterAll(async () => {
+      await ctx.cleanup();
+    });
+
+    it("T11.5: resource.data should reference existing document data", async () => {
+      // Create an unlocked document
+      await fetchWithAuth(ctx.port, "PUT", "/docs/lockable/unlocked", {
+        data: { name: "Unlocked", locked: false },
+      });
+
+      // Update should succeed (locked != true)
+      const updateOk = await fetchWithAuth(ctx.port, "PATCH", "/docs/lockable/unlocked", {
+        data: { name: "Updated" },
+      });
+      expect(updateOk.status).toBe(200);
+
+      // Create a locked document
+      await fetchWithAuth(ctx.port, "PUT", "/docs/lockable/locked", {
+        data: { name: "Locked", locked: true },
+      });
+
+      // Update should fail (locked == true)
+      const updateFail = await fetchWithAuth(ctx.port, "PATCH", "/docs/lockable/locked", {
+        data: { name: "Hacked" },
+      });
+      expect(updateFail.status).toBe(403);
+
+      // Delete locked should fail
+      const deleteFail = await fetchWithAuth(ctx.port, "DELETE", "/docs/lockable/locked");
+      expect(deleteFail.status).toBe(403);
+
+      // Delete unlocked should succeed
+      const deleteOk = await fetchWithAuth(ctx.port, "DELETE", "/docs/lockable/unlocked");
+      expect(deleteOk.status).toBe(200);
+    });
+  });
+
   describe("token claims rules", () => {
     let ctx: TestContext;
     const rules: SecurityRules = {

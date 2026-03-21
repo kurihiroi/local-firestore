@@ -1,4 +1,6 @@
+import type { DocumentData } from "@local-firestore/shared";
 import type { MiddlewareHandler } from "hono";
+import type { DocumentService } from "../services/document.js";
 import { isDocumentPath, parseDocumentPath } from "../utils/path.js";
 import type { AuthProvider } from "./auth-provider.js";
 import type { Operation, SecurityRulesEngine } from "./rules-engine.js";
@@ -24,6 +26,24 @@ function resolveOperation(method: string, path: string): Operation | null {
 }
 
 /**
+ * リクエストボディから書き込みデータを抽出する
+ */
+async function extractRequestData(
+  method: string,
+  req: { json: <T>() => Promise<T> },
+): Promise<DocumentData | undefined> {
+  if (method === "PUT" || method === "PATCH" || method === "POST") {
+    try {
+      const body = await req.json<{ data?: DocumentData }>();
+      return body?.data;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * セキュリティルールミドルウェア
  *
  * /docs/* パスへのリクエストに対してセキュリティルールを適用する。
@@ -33,6 +53,7 @@ function resolveOperation(method: string, path: string): Operation | null {
 export function securityRulesMiddleware(
   engine: SecurityRulesEngine,
   authProvider: AuthProvider,
+  documentService?: DocumentService,
 ): MiddlewareHandler {
   return async (c, next) => {
     const reqPath = c.req.path;
@@ -66,11 +87,27 @@ export function securityRulesMiddleware(
       documentId = "";
     }
 
+    // リクエストデータの抽出（書き込み操作時）
+    const requestData = await extractRequestData(c.req.method, c.req);
+
+    // 既存ドキュメントデータの取得（update/delete時）
+    let existingData: DocumentData | undefined;
+    if (
+      documentService &&
+      (operation === "update" || operation === "delete") &&
+      isDocumentPath(docPath)
+    ) {
+      const existing = documentService.getDocument(docPath);
+      existingData = existing?.data;
+    }
+
     const result = engine.evaluate(operation, {
       auth,
       path: docPath,
       documentId,
       collectionPath,
+      requestData,
+      existingData,
       requestTime: new Date(),
     });
 

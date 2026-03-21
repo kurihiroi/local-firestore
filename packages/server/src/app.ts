@@ -55,7 +55,10 @@ export function createApp(
 
   // セキュリティルール
   if (options?.securityRules && options?.authProvider) {
-    app.use("*", securityRulesMiddleware(options.securityRules, options.authProvider));
+    app.use(
+      "*",
+      securityRulesMiddleware(options.securityRules, options.authProvider, documentService),
+    );
   }
 
   // ヘルスチェック
