@@ -545,4 +545,93 @@ describe("RulesEvaluator", () => {
       expect(evaluator.evaluateExpression("string(42) == '42'", makeEvalContext())).toBe(true);
     });
   });
+
+  describe("$(variable) path interpolation", () => {
+    it("should interpolate simple wildcard variable", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "'hello_$(userId)' == 'hello_user1'",
+          makeEvalContext({ wildcardBindings: { userId: "user1" } }),
+        ),
+      ).toBe(true);
+    });
+
+    it("should interpolate $(database) in path string", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "'/databases/$(database)/documents/users/doc1' == '/databases/mydb/documents/users/doc1'",
+          makeEvalContext({ wildcardBindings: { database: "mydb" } }),
+        ),
+      ).toBe(true);
+    });
+
+    it("should interpolate nested member access like $(request.auth.uid)", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "'/databases/(default)/documents/users/$(request.auth.uid)' == '/databases/(default)/documents/users/user1'",
+          makeEvalContext({ auth: { uid: "user1" } }),
+        ),
+      ).toBe(true);
+    });
+
+    it("should interpolate multiple variables in one string", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "'/databases/$(database)/documents/users/$(userId)' == '/databases/mydb/documents/users/u1'",
+          makeEvalContext({ wildcardBindings: { database: "mydb", userId: "u1" } }),
+        ),
+      ).toBe(true);
+    });
+
+    it("should pass through strings without $()", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "'no interpolation here' == 'no interpolation here'",
+          makeEvalContext(),
+        ),
+      ).toBe(true);
+    });
+
+    it("should work with path() function", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "path('/databases/$(database)/documents/test') == path('/databases/mydb/documents/test')",
+          makeEvalContext({ wildcardBindings: { database: "mydb" } }),
+        ),
+      ).toBe(true);
+    });
+
+    it("should throw on undefined variable in interpolation", () => {
+      const evaluator = createEvaluator();
+      expect(() =>
+        evaluator.evaluateExpression("'$(undefinedVar)' == 'x'", makeEvalContext()),
+      ).toThrow("Undefined variable in path interpolation: undefinedVar");
+    });
+
+    it("should interpolate exists() path with wildcard bindings", () => {
+      const resolver = {
+        getDocument(path: string): Record<string, unknown> | null {
+          if (path === "/databases/(default)/documents/profiles/user1") {
+            return { name: "Alice" };
+          }
+          return null;
+        },
+      };
+      const evaluator = new RulesEvaluator(new BuiltinFunctionContext(resolver));
+      expect(
+        evaluator.evaluateExpression(
+          "exists(path('/databases/$(database)/documents/profiles/$(userId)'))",
+          makeEvalContext({
+            wildcardBindings: { database: "(default)", userId: "user1" },
+          }),
+        ),
+      ).toBe(true);
+    });
+  });
 });
