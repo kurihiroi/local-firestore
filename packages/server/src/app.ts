@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createBatchRoutes } from "./routes/batch.js";
+import { createDataRoutes } from "./routes/data.js";
 import { createDocumentRoutes } from "./routes/documents.js";
 import { createQueryRoutes } from "./routes/query.js";
 import { DocumentService } from "./services/document.js";
@@ -36,6 +37,9 @@ export function createApp(db: Database.Database, listenerManager?: ListenerManag
 
   // バッチ・トランザクションルート
   app.route("/", createBatchRoutes(transactionService, onDocumentChange));
+
+  // データエクスポート・インポートルート
+  app.route("/", createDataRoutes(repo));
 
   return app;
 }

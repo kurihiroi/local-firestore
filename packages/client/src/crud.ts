@@ -3,7 +3,9 @@ import type {
   AddDocumentResponse,
   DocumentData,
   GetDocumentResponse,
+  PartialWithFieldValue,
   SetDocumentRequest,
+  SetOptions,
   WithFieldValue,
 } from "@local-firestore/shared";
 import { doc } from "./references.js";
@@ -42,10 +44,24 @@ export async function getDoc<T = DocumentData>(
 export async function setDoc<T = DocumentData>(
   reference: DocumentReference<T>,
   data: WithFieldValue<T>,
+): Promise<void>;
+export async function setDoc<T = DocumentData>(
+  reference: DocumentReference<T>,
+  data: PartialWithFieldValue<T>,
+  options: SetOptions,
+): Promise<void>;
+export async function setDoc<T = DocumentData>(
+  reference: DocumentReference<T>,
+  data: WithFieldValue<T> | PartialWithFieldValue<T>,
+  options?: SetOptions,
 ): Promise<void> {
   const transport = reference._firestore._transport;
-  const dbData = reference._converter ? reference._converter.toFirestore(data) : data;
-  const body: SetDocumentRequest = { data: dbData as DocumentData };
+  const dbData = reference._converter
+    ? options
+      ? reference._converter.toFirestore(data as PartialWithFieldValue<T>, options)
+      : reference._converter.toFirestore(data as WithFieldValue<T>)
+    : data;
+  const body: SetDocumentRequest = { data: dbData as DocumentData, options };
   await transport.put(`/docs/${reference.path}`, body);
 }
 

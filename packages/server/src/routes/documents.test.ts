@@ -121,6 +121,58 @@ describe("Document Routes", () => {
     });
   });
 
+  describe("PUT /docs/:path with merge - setDoc with merge", () => {
+    it("merge: trueで既存フィールドを保持したまま新しいフィールドを追加できる", async () => {
+      await request(app, "PUT", "/docs/users/alice", {
+        data: { name: "Alice", age: 30, city: "Tokyo" },
+      });
+
+      const res = await request(app, "PUT", "/docs/users/alice", {
+        data: { age: 31, email: "alice@example.com" },
+        options: { merge: true },
+      });
+      expect(res.status).toBe(200);
+
+      const getRes = await request(app, "GET", "/docs/users/alice");
+      const body = await jsonBody(getRes);
+      expect(body.data).toEqual({
+        name: "Alice",
+        age: 31,
+        city: "Tokyo",
+        email: "alice@example.com",
+      });
+    });
+
+    it("mergeFieldsで指定したフィールドのみ更新される", async () => {
+      await request(app, "PUT", "/docs/users/bob", {
+        data: { name: "Bob", age: 25, city: "Osaka" },
+      });
+
+      const res = await request(app, "PUT", "/docs/users/bob", {
+        data: { age: 26, city: "Kyoto", email: "bob@example.com" },
+        options: { mergeFields: ["age"] },
+      });
+      expect(res.status).toBe(200);
+
+      const getRes = await request(app, "GET", "/docs/users/bob");
+      const body = await jsonBody(getRes);
+      expect(body.data).toEqual({ name: "Bob", age: 26, city: "Osaka" });
+    });
+
+    it("存在しないドキュメントにmerge: trueでsetすると新規作成される", async () => {
+      const res = await request(app, "PUT", "/docs/users/charlie", {
+        data: { name: "Charlie" },
+        options: { merge: true },
+      });
+      expect(res.status).toBe(200);
+
+      const getRes = await request(app, "GET", "/docs/users/charlie");
+      const body = await jsonBody(getRes);
+      expect(body.exists).toBe(true);
+      expect(body.data).toEqual({ name: "Charlie" });
+    });
+  });
+
   describe("サブコレクション", () => {
     it("サブコレクションのドキュメントをCRUDできる", async () => {
       await request(app, "PUT", "/docs/users/alice/posts/post1", {

@@ -150,6 +150,37 @@ export interface ErrorResponse {
 }
 
 // ============================================================
+// Export / Import
+// ============================================================
+
+/** エクスポートされたドキュメント */
+export interface ExportedDocument {
+  path: string;
+  data: DocumentData;
+  createTime: string;
+  updateTime: string;
+}
+
+/** GET /export レスポンス */
+export interface ExportResponse {
+  version: 1;
+  exportedAt: string;
+  documents: ExportedDocument[];
+}
+
+/** POST /import リクエスト */
+export interface ImportRequest {
+  documents: ExportedDocument[];
+  /** trueの場合、既存データを削除してからインポートする */
+  clean?: boolean;
+}
+
+/** POST /import レスポンス */
+export interface ImportResponse {
+  imported: number;
+}
+
+// ============================================================
 // WebSocket メッセージ（リアルタイムリスナー）
 // ============================================================
 

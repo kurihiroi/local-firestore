@@ -1,4 +1,9 @@
-import type { DocumentData, DocumentMetadata, FirestoreErrorCode } from "@local-firestore/shared";
+import type {
+  DocumentData,
+  DocumentMetadata,
+  FirestoreErrorCode,
+  SetOptions,
+} from "@local-firestore/shared";
 import { isFieldValueSentinel } from "@local-firestore/shared";
 import type { DocumentRepository } from "../storage/repository.js";
 import { generateDocumentId } from "../utils/id.js";
@@ -11,15 +16,34 @@ export class DocumentService {
     return this.repo.get(path);
   }
 
-  setDocument(path: string, data: DocumentData): DocumentMetadata {
+  setDocument(path: string, data: DocumentData, options?: SetOptions): DocumentMetadata {
     const { collectionPath, documentId } = parseDocumentPath(path);
-    const resolvedData = this.resolveFieldValues(data, this.repo.get(path)?.data);
+    const existing = this.repo.get(path);
+    const resolvedData = this.resolveFieldValues(data, existing?.data);
+
+    let finalData: DocumentData;
+    if (options && existing) {
+      if ("merge" in options && options.merge) {
+        finalData = { ...existing.data, ...resolvedData };
+      } else if ("mergeFields" in options) {
+        finalData = { ...existing.data };
+        for (const field of options.mergeFields) {
+          if (field in resolvedData) {
+            finalData[field] = resolvedData[field];
+          }
+        }
+      } else {
+        finalData = resolvedData;
+      }
+    } else {
+      finalData = resolvedData;
+    }
 
     return this.repo.set({
       path,
       collectionPath,
       documentId,
-      data: resolvedData,
+      data: finalData,
     });
   }
 
