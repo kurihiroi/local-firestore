@@ -1,4 +1,3 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   collection,
   doc,
@@ -9,6 +8,7 @@ import {
   setDoc,
   where,
 } from "@local-firestore/client";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startTestServer, type TestContext } from "./helpers.js";
 
 describe("E2E: Query operations", () => {

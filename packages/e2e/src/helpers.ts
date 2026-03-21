@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
+import { type Firestore, getFirestore } from "@local-firestore/client";
 import { createApp, createDatabase, ListenerManager, QueryService } from "@local-firestore/server";
-import { getFirestore, type Firestore } from "@local-firestore/client";
 
 export interface TestContext {
   server: Server;
