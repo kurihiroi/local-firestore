@@ -4,6 +4,7 @@ import {
   getDoc,
   runTransaction,
   setDoc,
+  type Transaction,
   writeBatch,
 } from "@local-firestore/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -57,7 +58,7 @@ describe("E2E: Batch & Transaction operations", () => {
       const ref = doc(collection(ctx.firestore, "accounts"), "acc1");
       await setDoc(ref, { balance: 1000 });
 
-      await runTransaction(ctx.firestore, async (tx) => {
+      await runTransaction(ctx.firestore, async (tx: Transaction) => {
         const snap = await tx.get(ref);
         const balance = (snap.data() as { balance: number }).balance;
         tx.update(ref, { balance: balance - 200 });

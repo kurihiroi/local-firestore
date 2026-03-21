@@ -1,11 +1,12 @@
 {
+  "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true
+    "baseUrl": ".",
+    "paths": {
+      "@local-firestore/client": ["../client/src/index.ts"],
+      "@local-firestore/server": ["../server/src/index.ts"],
+      "@local-firestore/shared": ["../shared/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

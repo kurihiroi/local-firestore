@@ -4,6 +4,7 @@ import {
   getDocs,
   limit,
   orderBy,
+  type QueryDocumentSnapshot,
   query,
   setDoc,
   where,
@@ -41,7 +42,7 @@ describe("E2E: Query operations", () => {
     const q = query(col, where("category", "==", "fruit"));
     const snap = await getDocs(q);
     expect(snap.size).toBe(2);
-    snap.forEach((d) => {
+    snap.forEach((d: QueryDocumentSnapshot) => {
       expect(d.data().category).toBe("fruit");
     });
   });
@@ -50,7 +51,7 @@ describe("E2E: Query operations", () => {
     const col = collection(ctx.firestore, "products");
     const q = query(col, orderBy("price", "asc"));
     const snap = await getDocs(q);
-    const prices = snap.docs.map((d) => d.data().price as number);
+    const prices = snap.docs.map((d: QueryDocumentSnapshot) => d.data().price as number);
     expect(prices).toEqual([50, 80, 100, 120, 200]);
   });
 
@@ -59,7 +60,7 @@ describe("E2E: Query operations", () => {
     const q = query(col, orderBy("price", "asc"), limit(3));
     const snap = await getDocs(q);
     expect(snap.size).toBe(3);
-    const prices = snap.docs.map((d) => d.data().price as number);
+    const prices = snap.docs.map((d: QueryDocumentSnapshot) => d.data().price as number);
     expect(prices).toEqual([50, 80, 100]);
   });
 
@@ -68,7 +69,7 @@ describe("E2E: Query operations", () => {
     const q = query(col, where("price", ">=", 100), orderBy("price", "desc"));
     const snap = await getDocs(q);
     expect(snap.size).toBe(3);
-    const names = snap.docs.map((d) => d.data().name);
+    const names = snap.docs.map((d: QueryDocumentSnapshot) => d.data().name);
     expect(names).toEqual(["Donut", "Eggplant", "Apple"]);
   });
 });
