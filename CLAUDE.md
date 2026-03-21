@@ -35,6 +35,14 @@ npx vitest run src/security/
 - プロジェクトルートから `npx vitest run packages/server/...` のように実行しないこと。各パッケージの `vitest.config.ts` が読み込まれず、エイリアス解決に失敗する
 - テスト実行前に `pnpm install` と `pnpm build` が完了していることを確認すること
 
+### lint 実行
+
+コミット前に必ず lint を実行してエラーがないことを確認する:
+
+```bash
+pnpm lint
+```
+
 ## コーディングルール
 
 - `any` 型の使用は禁止（テストコードを含む）。どうしても必要な場合はユーザーに相談して許可を得ること
