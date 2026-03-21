@@ -35,7 +35,7 @@ export {
   serverTimestamp,
 } from "./field-values.js";
 export type { FirestoreSettings } from "./firestore.js";
-export { getFirestore } from "./firestore.js";
+export { getFirestore, initializeFirestore } from "./firestore.js";
 export { GeoPoint } from "./geo-point.js";
 // Real-time listeners
 export type { DocumentChange, DocumentChangeType, Unsubscribe } from "./listener.js";
@@ -69,7 +69,7 @@ export { runTransaction, Transaction } from "./transaction.js";
 export { FirestoreError } from "./transport.js";
 // Types
 export type { CollectionReference, DocumentReference, Firestore } from "./types.js";
-export { DocumentSnapshot, Timestamp } from "./types.js";
+export { DocumentSnapshot, FieldPath, Timestamp } from "./types.js";
 // Write queue (offline support)
 export type {
   QueuedWrite,

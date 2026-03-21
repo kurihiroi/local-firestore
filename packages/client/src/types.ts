@@ -121,3 +121,58 @@ export class Timestamp {
     return `Timestamp(seconds=${this.seconds}, nanoseconds=${this.nanoseconds})`;
   }
 }
+
+/**
+ * FieldPath - フィールドパスを表すクラス
+ *
+ * ネストされたフィールドへのアクセスに使用する。
+ * Firebase互換の `FieldPath` と同じインターフェース。
+ */
+export class FieldPath {
+  private readonly segments: string[];
+
+  constructor(...fieldNames: string[]) {
+    if (fieldNames.length === 0) {
+      throw new Error("FieldPath must have at least one field name");
+    }
+    for (const name of fieldNames) {
+      if (typeof name !== "string" || name.length === 0) {
+        throw new Error("FieldPath field names must be non-empty strings");
+      }
+    }
+    this.segments = fieldNames;
+  }
+
+  /** ドキュメントIDを指す特殊な FieldPath */
+  static documentId(): FieldPath {
+    return new FieldPath("__name__");
+  }
+
+  /** ドット区切りのパス文字列を返す */
+  toString(): string {
+    return this.segments.join(".");
+  }
+
+  /** 他の FieldPath と等しいか比較する */
+  isEqual(other: FieldPath): boolean {
+    if (this.segments.length !== other.segments.length) return false;
+    return this.segments.every((s, i) => s === other.segments[i]);
+  }
+
+  /** @internal セグメント配列を取得 */
+  getSegments(): ReadonlyArray<string> {
+    return this.segments;
+  }
+
+  /** @internal ネストされたオブジェクトから値を取得する */
+  resolveValue(data: Record<string, unknown>): unknown {
+    let current: unknown = data;
+    for (const segment of this.segments) {
+      if (current === null || current === undefined || typeof current !== "object") {
+        return undefined;
+      }
+      current = (current as Record<string, unknown>)[segment];
+    }
+    return current;
+  }
+}
