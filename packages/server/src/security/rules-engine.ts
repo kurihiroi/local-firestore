@@ -1,4 +1,10 @@
 import type { DocumentData } from "@local-firestore/shared";
+import {
+  BuiltinFunctionContext,
+  type DocumentResolver,
+} from "./rules-evaluator/builtin-functions.js";
+import type { EvaluationContext, QueryParams } from "./rules-evaluator/context.js";
+import { RulesEvaluator } from "./rules-evaluator/evaluator.js";
 
 /** 操作の種類 */
 export type Operation = "read" | "get" | "list" | "write" | "create" | "update" | "delete";
@@ -6,6 +12,8 @@ export type Operation = "read" | "get" | "list" | "write" | "create" | "update" 
 /** セキュリティルール定義 */
 export interface SecurityRules {
   rules: CollectionRules;
+  /** グローバルカスタム関数定義（式文字列） */
+  functions?: string;
 }
 
 /** コレクション別のルール定義 */
@@ -31,6 +39,8 @@ export interface CollectionRule {
   delete?: boolean | string;
   /** サブコレクションのルール */
   subcollections?: CollectionRules;
+  /** カスタム関数定義（式の前に付与される） */
+  functions?: string;
 }
 
 /** ルール評価に使うコンテキスト */
@@ -47,11 +57,16 @@ export interface RuleContext {
   requestData?: DocumentData;
   /** 既存のドキュメントデータ（更新・削除時） */
   existingData?: DocumentData;
+  /** リクエスト時刻 */
+  requestTime?: Date;
+  /** クエリパラメータ */
+  queryParams?: QueryParams;
 }
 
 /** 認証コンテキスト */
 export interface AuthContext {
   uid: string;
+  token?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -62,17 +77,23 @@ export interface RuleEvaluationResult {
   reason?: string;
 }
 
+/** ワイルドカードパターン: {variableName} or {variableName=**} */
+const WILDCARD_PATTERN = /^\{(\w+)(=\*\*)?\}$/;
+
 /**
  * セキュリティルールエンジン
  *
- * Firebaseセキュリティルールの簡易版。
- * JSONベースのルール定義でドキュメントへのアクセスを制御する。
+ * Firebaseセキュリティルールの完全実装。
+ * ASTベースのパーサー・評価器でルール式を評価する。
  */
 export class SecurityRulesEngine {
   private rules: SecurityRules;
+  private evaluator: RulesEvaluator;
 
-  constructor(rules: SecurityRules) {
+  constructor(rules: SecurityRules, resolver?: DocumentResolver) {
     this.rules = rules;
+    const builtins = new BuiltinFunctionContext(resolver ?? null);
+    this.evaluator = new RulesEvaluator(builtins);
   }
 
   /**
@@ -82,25 +103,23 @@ export class SecurityRulesEngine {
     const segments = context.collectionPath.split("/");
     let currentRules = this.rules.rules;
     let matchedRule: CollectionRule | undefined;
+    const wildcardBindings: Record<string, string> = {};
 
     // コレクションパスに沿ってルールを探索
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
+      const match = this.findMatchingRule(currentRules, segment, wildcardBindings);
 
-      // 完全一致を優先、なければワイルドカード
-      if (currentRules[segment]) {
-        matchedRule = currentRules[segment];
-      } else if (currentRules["{collection}"]) {
-        matchedRule = currentRules["{collection}"];
-      } else {
-        // ルールが見つからない場合はデフォルト拒否
+      if (!match) {
         return {
           allowed: false,
           reason: `No rule found for collection: ${context.collectionPath}`,
         };
       }
 
-      // 次のサブコレクション層へ進む（奇数インデックスはドキュメントID部分をスキップ）
+      matchedRule = match;
+
+      // 次のサブコレクション層へ進む
       if (i < segments.length - 1 && matchedRule.subcollections) {
         currentRules = matchedRule.subcollections;
         matchedRule = undefined;
@@ -122,9 +141,71 @@ export class SecurityRulesEngine {
       return { allowed: ruleValue, rule: String(ruleValue) };
     }
 
-    // 文字列の場合は式として評価
-    const allowed = this.evaluateExpression(ruleValue, context);
-    return { allowed, rule: ruleValue };
+    // 文字列の場合はAST評価器で評価
+    try {
+      // カスタム関数定義を式の前に付与
+      const functionsPrefix = this.buildFunctionsPrefix(matchedRule);
+      const fullExpr = functionsPrefix + ruleValue;
+
+      const evalContext: EvaluationContext = {
+        auth: context.auth,
+        path: context.path,
+        documentId: context.documentId,
+        collectionPath: context.collectionPath,
+        operation,
+        requestData: context.requestData,
+        existingData: context.existingData,
+        requestTime: context.requestTime ?? new Date(),
+        queryParams: context.queryParams,
+        wildcardBindings,
+      };
+
+      const allowed = this.evaluator.evaluateExpression(fullExpr, evalContext);
+      return { allowed, rule: ruleValue };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { allowed: false, reason: `Rule evaluation error: ${message}`, rule: ruleValue };
+    }
+  }
+
+  /**
+   * コレクションルールからマッチするルールを探す
+   * 完全一致 → ワイルドカード → 再帰ワイルドカード の優先順
+   */
+  private findMatchingRule(
+    rules: CollectionRules,
+    segment: string,
+    wildcardBindings: Record<string, string>,
+  ): CollectionRule | undefined {
+    // 1. 完全一致
+    if (rules[segment]) {
+      return rules[segment];
+    }
+
+    // 2. ワイルドカードパターン（{variableName}）
+    for (const [pattern, rule] of Object.entries(rules)) {
+      const match = WILDCARD_PATTERN.exec(pattern);
+      if (match) {
+        const varName = match[1];
+        const isRecursive = !!match[2];
+        if (!isRecursive) {
+          wildcardBindings[varName] = segment;
+          return rule;
+        }
+      }
+    }
+
+    // 3. 再帰ワイルドカード（{variableName=**}）
+    for (const [pattern, rule] of Object.entries(rules)) {
+      const match = WILDCARD_PATTERN.exec(pattern);
+      if (match?.[2]) {
+        const varName = match[1];
+        wildcardBindings[varName] = segment;
+        return rule;
+      }
+    }
+
+    return undefined;
   }
 
   /**
@@ -154,65 +235,17 @@ export class SecurityRulesEngine {
   }
 
   /**
-   * ルール式を評価する
-   *
-   * サポートする式:
-   * - "true" / "false"
-   * - "auth != null" (認証済みかどうか)
-   * - "auth.uid == documentId" (自分のドキュメントか)
-   * - "auth.uid == resource.data.userId" (ドキュメントのuserIdが自分か)
-   * - "request.data.keys().size() <= N" (フィールド数制限)
+   * カスタム関数定義を式の前に付与するプレフィックスを構築
    */
-  private evaluateExpression(expr: string, context: RuleContext): boolean {
-    const trimmed = expr.trim();
-
-    if (trimmed === "true") return true;
-    if (trimmed === "false") return false;
-
-    // auth != null
-    if (trimmed === "auth != null") {
-      return context.auth !== null;
+  private buildFunctionsPrefix(rule: CollectionRule): string {
+    let prefix = "";
+    if (this.rules.functions) {
+      prefix += `${this.rules.functions} `;
     }
-
-    // auth == null
-    if (trimmed === "auth == null") {
-      return context.auth === null;
+    if (rule.functions) {
+      prefix += `${rule.functions} `;
     }
-
-    // auth.uid == documentId
-    if (trimmed === "auth.uid == documentId") {
-      return context.auth?.uid === context.documentId;
-    }
-
-    // auth.uid == resource.data.<field>
-    const resourceMatch = trimmed.match(/^auth\.uid\s*==\s*resource\.data\.(\w+)$/);
-    if (resourceMatch) {
-      const field = resourceMatch[1];
-      return context.auth?.uid === context.existingData?.[field];
-    }
-
-    // request.data.keys().size() <= N
-    const sizeMatch = trimmed.match(/^request\.data\.keys\(\)\.size\(\)\s*<=\s*(\d+)$/);
-    if (sizeMatch) {
-      const maxSize = Number(sizeMatch[1]);
-      const keys = context.requestData ? Object.keys(context.requestData) : [];
-      return keys.length <= maxSize;
-    }
-
-    // && (AND) 演算子
-    if (trimmed.includes("&&")) {
-      const parts = trimmed.split("&&");
-      return parts.every((part) => this.evaluateExpression(part, context));
-    }
-
-    // || (OR) 演算子
-    if (trimmed.includes("||")) {
-      const parts = trimmed.split("||");
-      return parts.some((part) => this.evaluateExpression(part, context));
-    }
-
-    // 未知の式はデフォルト拒否
-    return false;
+    return prefix;
   }
 }
 
