@@ -38,7 +38,9 @@ export class Parser {
     const parser = new Parser(tokens);
     const expr = parser.parseExpr();
     if (parser.current().type !== "EOF") {
-      throw new Error(`Unexpected token '${parser.current().value}' at position ${parser.current().pos}`);
+      throw new Error(
+        `Unexpected token '${parser.current().value}' at position ${parser.current().pos}`,
+      );
     }
     return expr;
   }
@@ -55,7 +57,9 @@ export class Parser {
 
     const expression = parser.parseExpr();
     if (parser.current().type !== "EOF") {
-      throw new Error(`Unexpected token '${parser.current().value}' at position ${parser.current().pos}`);
+      throw new Error(
+        `Unexpected token '${parser.current().value}' at position ${parser.current().pos}`,
+      );
     }
     return { functions, expression };
   }
@@ -77,7 +81,9 @@ export class Parser {
   private expect(type: TokenType): Token {
     const token = this.current();
     if (token.type !== type) {
-      throw new Error(`Expected ${type} but got ${token.type} ('${token.value}') at position ${token.pos}`);
+      throw new Error(
+        `Expected ${type} but got ${token.type} ('${token.value}') at position ${token.pos}`,
+      );
     }
     return this.advance();
   }
@@ -204,7 +210,9 @@ export class Parser {
           this.advance();
           left = { type: "IsExpression", value: left, targetType: token.value };
         } else {
-          throw new Error(`Expected type name but got ${token.type} ('${token.value}') at position ${token.pos}`);
+          throw new Error(
+            `Expected type name but got ${token.type} ('${token.value}') at position ${token.pos}`,
+          );
         }
       } else {
         break;

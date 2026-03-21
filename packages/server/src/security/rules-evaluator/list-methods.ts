@@ -1,12 +1,10 @@
 import {
-  type RulesList,
-  type RulesSet,
-  type RulesValue,
   mkBool,
   mkInt,
   mkList,
   mkSet,
   mkString,
+  type RulesValue,
   rulesValueEquals,
   rulesValueToString,
 } from "./types.js";
@@ -14,11 +12,7 @@ import {
 /**
  * List 型のメソッドをディスパッチする
  */
-export function callListMethod(
-  list: RulesValue[],
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callListMethod(list: RulesValue[], method: string, args: RulesValue[]): RulesValue {
   switch (method) {
     case "size":
       return mkInt(list.length);
@@ -65,9 +59,7 @@ export function callListMethod(
     case "removeAll": {
       assertArgCount("removeAll", args, 1);
       const toRemove = assertList(args[0], "removeAll argument");
-      const filtered = list.filter(
-        (item) => !toRemove.some((r) => rulesValueEquals(item, r)),
-      );
+      const filtered = list.filter((item) => !toRemove.some((r) => rulesValueEquals(item, r)));
       return mkList(filtered);
     }
 

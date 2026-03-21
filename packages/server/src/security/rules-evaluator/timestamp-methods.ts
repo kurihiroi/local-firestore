@@ -1,17 +1,9 @@
-import {
-  type RulesValue,
-  mkInt,
-  mkTimestamp,
-} from "./types.js";
+import { mkInt, mkTimestamp, type RulesValue } from "./types.js";
 
 /**
  * Timestamp 型のメソッドをディスパッチする
  */
-export function callTimestampMethod(
-  date: Date,
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callTimestampMethod(date: Date, method: string, args: RulesValue[]): RulesValue {
   assertArgCount(method, args, 0);
 
   switch (method) {
@@ -52,13 +44,11 @@ export function callTimestampMethod(
 /**
  * timestamp namespace 関数
  */
-export function callTimestampNamespace(
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callTimestampNamespace(method: string, args: RulesValue[]): RulesValue {
   switch (method) {
     case "date": {
-      if (args.length !== 3) throw new Error("timestamp.date() expects 3 arguments (year, month, day)");
+      if (args.length !== 3)
+        throw new Error("timestamp.date() expects 3 arguments (year, month, day)");
       const year = assertInt(args[0], "year");
       const month = assertInt(args[1], "month");
       const day = assertInt(args[2], "day");

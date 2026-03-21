@@ -1,5 +1,5 @@
 import type { RulesValue } from "./types.js";
-import { mkBool, mkMap, mkNull, toRulesValue } from "./types.js";
+import { mkBool, mkNull, toRulesValue } from "./types.js";
 
 /**
  * ドキュメント取得関数の型

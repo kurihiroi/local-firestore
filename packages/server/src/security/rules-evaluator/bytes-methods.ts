@@ -1,17 +1,9 @@
-import {
-  type RulesValue,
-  mkInt,
-  mkString,
-} from "./types.js";
+import { mkInt, mkString, type RulesValue } from "./types.js";
 
 /**
  * Bytes 型のメソッドをディスパッチする
  */
-export function callBytesMethod(
-  bytes: Uint8Array,
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callBytesMethod(bytes: Uint8Array, method: string, args: RulesValue[]): RulesValue {
   assertArgCount(method, args, 0);
 
   switch (method) {

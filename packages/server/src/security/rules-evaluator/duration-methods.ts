@@ -1,9 +1,4 @@
-import {
-  type RulesDuration,
-  type RulesValue,
-  mkDuration,
-  mkInt,
-} from "./types.js";
+import { mkDuration, mkInt, type RulesValue } from "./types.js";
 
 const NANOS_PER_SECOND = 1_000_000_000;
 const NANOS_PER_MINUTE = 60 * NANOS_PER_SECOND;
@@ -12,11 +7,7 @@ const NANOS_PER_HOUR = 60 * NANOS_PER_MINUTE;
 /**
  * Duration 型のメソッドをディスパッチする
  */
-export function callDurationMethod(
-  nanos: number,
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callDurationMethod(nanos: number, method: string, args: RulesValue[]): RulesValue {
   assertArgCount(method, args, 0);
 
   switch (method) {
@@ -36,10 +27,7 @@ export function callDurationMethod(
 /**
  * duration namespace 関数
  */
-export function callDurationNamespace(
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callDurationNamespace(method: string, args: RulesValue[]): RulesValue {
   switch (method) {
     case "time": {
       if (args.length !== 4) {
@@ -50,10 +38,7 @@ export function callDurationNamespace(
       const seconds = assertInt(args[2], "seconds");
       const nanos = assertInt(args[3], "nanos");
       return mkDuration(
-        hours * NANOS_PER_HOUR +
-          minutes * NANOS_PER_MINUTE +
-          seconds * NANOS_PER_SECOND +
-          nanos,
+        hours * NANOS_PER_HOUR + minutes * NANOS_PER_MINUTE + seconds * NANOS_PER_SECOND + nanos,
       );
     }
     case "value": {

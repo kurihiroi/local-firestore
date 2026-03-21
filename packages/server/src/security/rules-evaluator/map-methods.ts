@@ -1,12 +1,11 @@
 import {
-  type RulesMap,
-  type RulesMapDiff,
-  type RulesValue,
   mkInt,
   mkList,
   mkMapDiff,
   mkSet,
   mkString,
+  type RulesMapDiff,
+  type RulesValue,
   rulesValueEquals,
 } from "./types.js";
 

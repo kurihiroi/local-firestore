@@ -1,10 +1,9 @@
 import {
-  type RulesSet,
-  type RulesValue,
   mkBool,
   mkInt,
   mkSet,
-  mkString,
+  type RulesSet,
+  type RulesValue,
   rulesValueToString,
 } from "./types.js";
 

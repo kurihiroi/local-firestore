@@ -1,20 +1,9 @@
-import {
-  type RulesValue,
-  mkBool,
-  mkBytes,
-  mkInt,
-  mkList,
-  mkString,
-} from "./types.js";
+import { mkBool, mkBytes, mkInt, mkList, mkString, type RulesValue } from "./types.js";
 
 /**
  * String 型のメソッドをディスパッチする
  */
-export function callStringMethod(
-  str: string,
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callStringMethod(str: string, method: string, args: RulesValue[]): RulesValue {
   switch (method) {
     case "size":
       return mkInt(str.length);

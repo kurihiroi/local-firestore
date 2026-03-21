@@ -1,17 +1,9 @@
-import {
-  type RulesValue,
-  mkBool,
-  mkFloat,
-  mkInt,
-} from "./types.js";
+import { mkBool, mkFloat, mkInt, type RulesValue } from "./types.js";
 
 /**
  * math namespace 関数
  */
-export function callMathFunction(
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callMathFunction(method: string, args: RulesValue[]): RulesValue {
   switch (method) {
     case "abs": {
       assertArgCount("abs", args, 1);
@@ -48,7 +40,7 @@ export function callMathFunction(
       assertArgCount("pow", args, 2);
       const base = assertNumber(args[0], "pow base");
       const exp = assertNumber(args[1], "pow exponent");
-      const result = Math.pow(base, exp);
+      const result = base ** exp;
       if (args[0].typeName === "int" && args[1].typeName === "int" && Number.isInteger(result)) {
         return mkInt(result);
       }

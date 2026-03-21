@@ -34,13 +34,19 @@ describe("RulesEvaluator", () => {
 
     it("should evaluate auth != null", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("auth != null", makeEvalContext({ auth: { uid: "u1" } }))).toBe(true);
-      expect(evaluator.evaluateExpression("auth != null", makeEvalContext({ auth: null }))).toBe(false);
+      expect(
+        evaluator.evaluateExpression("auth != null", makeEvalContext({ auth: { uid: "u1" } })),
+      ).toBe(true);
+      expect(evaluator.evaluateExpression("auth != null", makeEvalContext({ auth: null }))).toBe(
+        false,
+      );
     });
 
     it("should evaluate auth == null", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("auth == null", makeEvalContext({ auth: null }))).toBe(true);
+      expect(evaluator.evaluateExpression("auth == null", makeEvalContext({ auth: null }))).toBe(
+        true,
+      );
     });
   });
 
@@ -152,39 +158,55 @@ describe("RulesEvaluator", () => {
 
     it("should evaluate string.matches()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("'hello'.matches('^h.*o$')", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("'hello'.matches('^h.*o$')", makeEvalContext())).toBe(
+        true,
+      );
     });
 
     it("should evaluate string.contains()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("'hello world'.contains('world')", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("'hello world'.contains('world')", makeEvalContext()),
+      ).toBe(true);
     });
 
     it("should evaluate string.lower() and string.upper()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("'Hello'.lower() == 'hello'", makeEvalContext())).toBe(true);
-      expect(evaluator.evaluateExpression("'Hello'.upper() == 'HELLO'", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("'Hello'.lower() == 'hello'", makeEvalContext())).toBe(
+        true,
+      );
+      expect(evaluator.evaluateExpression("'Hello'.upper() == 'HELLO'", makeEvalContext())).toBe(
+        true,
+      );
     });
 
     it("should evaluate string.trim()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("' hello '.trim() == 'hello'", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("' hello '.trim() == 'hello'", makeEvalContext())).toBe(
+        true,
+      );
     });
 
     it("should evaluate string.split()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("'a,b,c'.split(',').size() == 3", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("'a,b,c'.split(',').size() == 3", makeEvalContext()),
+      ).toBe(true);
     });
 
     it("should evaluate string.startsWith() and string.endsWith()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("'hello'.startsWith('he')", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("'hello'.startsWith('he')", makeEvalContext())).toBe(
+        true,
+      );
       expect(evaluator.evaluateExpression("'hello'.endsWith('lo')", makeEvalContext())).toBe(true);
     });
 
     it("should evaluate string.replace()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("'hello'.replace('l', 'r') == 'herro'", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("'hello'.replace('l', 'r') == 'herro'", makeEvalContext()),
+      ).toBe(true);
     });
   });
 
@@ -196,66 +218,96 @@ describe("RulesEvaluator", () => {
 
     it("should evaluate list.hasAny()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("[1, 2, 3].hasAny([2, 4])", makeEvalContext())).toBe(true);
-      expect(evaluator.evaluateExpression("[1, 2, 3].hasAny([4, 5])", makeEvalContext())).toBe(false);
+      expect(evaluator.evaluateExpression("[1, 2, 3].hasAny([2, 4])", makeEvalContext())).toBe(
+        true,
+      );
+      expect(evaluator.evaluateExpression("[1, 2, 3].hasAny([4, 5])", makeEvalContext())).toBe(
+        false,
+      );
     });
 
     it("should evaluate list.hasAll()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("[1, 2, 3].hasAll([1, 2])", makeEvalContext())).toBe(true);
-      expect(evaluator.evaluateExpression("[1, 2, 3].hasAll([1, 4])", makeEvalContext())).toBe(false);
+      expect(evaluator.evaluateExpression("[1, 2, 3].hasAll([1, 2])", makeEvalContext())).toBe(
+        true,
+      );
+      expect(evaluator.evaluateExpression("[1, 2, 3].hasAll([1, 4])", makeEvalContext())).toBe(
+        false,
+      );
     });
 
     it("should evaluate list.hasOnly()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("[1, 2].hasOnly([1, 2, 3])", makeEvalContext())).toBe(true);
-      expect(evaluator.evaluateExpression("[1, 4].hasOnly([1, 2, 3])", makeEvalContext())).toBe(false);
+      expect(evaluator.evaluateExpression("[1, 2].hasOnly([1, 2, 3])", makeEvalContext())).toBe(
+        true,
+      );
+      expect(evaluator.evaluateExpression("[1, 4].hasOnly([1, 2, 3])", makeEvalContext())).toBe(
+        false,
+      );
     });
 
     it("should evaluate list.concat()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("[1, 2].concat([3, 4]).size() == 4", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("[1, 2].concat([3, 4]).size() == 4", makeEvalContext()),
+      ).toBe(true);
     });
 
     it("should evaluate list.join()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("['a', 'b', 'c'].join(',') == 'a,b,c'", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("['a', 'b', 'c'].join(',') == 'a,b,c'", makeEvalContext()),
+      ).toBe(true);
     });
   });
 
   describe("map operations", () => {
     it("should evaluate map.size()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("{'a': 1, 'b': 2}.size() == 2", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("{'a': 1, 'b': 2}.size() == 2", makeEvalContext())).toBe(
+        true,
+      );
     });
 
     it("should evaluate map.keys()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("{'a': 1, 'b': 2}.keys().size() == 2", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("{'a': 1, 'b': 2}.keys().size() == 2", makeEvalContext()),
+      ).toBe(true);
     });
 
     it("should evaluate map.get() with default", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("{'a': 1}.get('b', 0) == 0", makeEvalContext())).toBe(true);
-      expect(evaluator.evaluateExpression("{'a': 1}.get('a', 0) == 1", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("{'a': 1}.get('b', 0) == 0", makeEvalContext())).toBe(
+        true,
+      );
+      expect(evaluator.evaluateExpression("{'a': 1}.get('a', 0) == 1", makeEvalContext())).toBe(
+        true,
+      );
     });
 
     it("should evaluate key in map", () => {
       const evaluator = createEvaluator();
       expect(evaluator.evaluateExpression("'a' in {'a': 1, 'b': 2}", makeEvalContext())).toBe(true);
-      expect(evaluator.evaluateExpression("'c' in {'a': 1, 'b': 2}", makeEvalContext())).toBe(false);
+      expect(evaluator.evaluateExpression("'c' in {'a': 1, 'b': 2}", makeEvalContext())).toBe(
+        false,
+      );
     });
   });
 
   describe("set operations", () => {
     it("should evaluate list.toSet()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("[1, 2, 2, 3].toSet().size() == 3", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("[1, 2, 2, 3].toSet().size() == 3", makeEvalContext()),
+      ).toBe(true);
     });
 
     it("should evaluate set.hasAll()", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("[1, 2, 3].toSet().hasAll([1, 2])", makeEvalContext())).toBe(true);
+      expect(
+        evaluator.evaluateExpression("[1, 2, 3].toSet().hasAll([1, 2])", makeEvalContext()),
+      ).toBe(true);
     });
   });
 
@@ -341,7 +393,10 @@ describe("RulesEvaluator", () => {
     it("should evaluate duration.time()", () => {
       const evaluator = createEvaluator();
       expect(
-        evaluator.evaluateExpression("duration.time(1, 30, 0, 0).minutes() == 90", makeEvalContext()),
+        evaluator.evaluateExpression(
+          "duration.time(1, 30, 0, 0).minutes() == 90",
+          makeEvalContext(),
+        ),
       ).toBe(true);
     });
   });
@@ -350,7 +405,10 @@ describe("RulesEvaluator", () => {
     it("should evaluate latlng.value()", () => {
       const evaluator = createEvaluator();
       expect(
-        evaluator.evaluateExpression("latlng.value(35.6, 139.7).latitude() == 35.6", makeEvalContext()),
+        evaluator.evaluateExpression(
+          "latlng.value(35.6, 139.7).latitude() == 35.6",
+          makeEvalContext(),
+        ),
       ).toBe(true);
     });
   });
@@ -465,7 +523,9 @@ describe("RulesEvaluator", () => {
 
     it("should access map by string key", () => {
       const evaluator = createEvaluator();
-      expect(evaluator.evaluateExpression("{'a': 1, 'b': 2}['a'] == 1", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("{'a': 1, 'b': 2}['a'] == 1", makeEvalContext())).toBe(
+        true,
+      );
     });
   });
 

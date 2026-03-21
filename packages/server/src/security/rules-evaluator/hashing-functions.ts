@@ -1,16 +1,10 @@
 import { createHash } from "node:crypto";
-import {
-  type RulesValue,
-  mkBytes,
-} from "./types.js";
+import { mkBytes, type RulesValue } from "./types.js";
 
 /**
  * hashing namespace 関数
  */
-export function callHashingFunction(
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callHashingFunction(method: string, args: RulesValue[]): RulesValue {
   if (args.length !== 1) {
     throw new Error(`hashing.${method}() expects 1 argument, got ${args.length}`);
   }

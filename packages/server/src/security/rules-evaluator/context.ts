@@ -1,17 +1,15 @@
 import type { DocumentData } from "@local-firestore/shared";
 import type { AuthContext, Operation } from "../rules-engine.js";
 import {
-  type RulesMap,
-  type RulesValue,
-  mkBool,
   mkInt,
-  mkList,
   mkMap,
   mkMapFromObject,
   mkNull,
   mkPath,
   mkString,
   mkTimestamp,
+  type RulesMap,
+  type RulesValue,
   toRulesValue,
 } from "./types.js";
 

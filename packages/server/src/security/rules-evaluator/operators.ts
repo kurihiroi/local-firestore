@@ -1,11 +1,11 @@
 import type { BinaryOperator, UnaryOperator } from "../rules-parser/ast.js";
 import {
-  type RulesValue,
   mkBool,
   mkFloat,
   mkInt,
   mkList,
   mkString,
+  type RulesValue,
   rulesValueEquals,
   rulesValueToString,
   toNumber,

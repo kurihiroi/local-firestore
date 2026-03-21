@@ -265,7 +265,9 @@ export function rulesValueEquals(a: RulesValue, b: RulesValue): boolean {
     case "duration":
       return a.nanos === (b as RulesDuration).nanos;
     case "latlng":
-      return a.latitude === (b as RulesLatLng).latitude && a.longitude === (b as RulesLatLng).longitude;
+      return (
+        a.latitude === (b as RulesLatLng).latitude && a.longitude === (b as RulesLatLng).longitude
+      );
     case "list": {
       const bl = b as RulesList;
       if (a.value.length !== bl.value.length) return false;

@@ -1,9 +1,4 @@
-import {
-  type RulesLatLng,
-  type RulesValue,
-  mkFloat,
-  mkLatLng,
-} from "./types.js";
+import { mkFloat, mkLatLng, type RulesLatLng, type RulesValue } from "./types.js";
 
 /**
  * LatLng 型のメソッドをディスパッチする
@@ -39,10 +34,7 @@ export function callLatLngMethod(
 /**
  * latlng namespace 関数
  */
-export function callLatLngNamespace(
-  method: string,
-  args: RulesValue[],
-): RulesValue {
+export function callLatLngNamespace(method: string, args: RulesValue[]): RulesValue {
   switch (method) {
     case "value": {
       if (args.length !== 2) {
@@ -67,7 +59,8 @@ function haversineDistance(a: RulesLatLng, b: RulesLatLng): number {
   const sinDLat = Math.sin(dLat / 2);
   const sinDLng = Math.sin(dLng / 2);
   const aVal =
-    sinDLat * sinDLat + Math.cos(toRad(a.latitude)) * Math.cos(toRad(b.latitude)) * sinDLng * sinDLng;
+    sinDLat * sinDLat +
+    Math.cos(toRad(a.latitude)) * Math.cos(toRad(b.latitude)) * sinDLng * sinDLng;
   const c = 2 * Math.atan2(Math.sqrt(aVal), Math.sqrt(1 - aVal));
   return R * c;
 }

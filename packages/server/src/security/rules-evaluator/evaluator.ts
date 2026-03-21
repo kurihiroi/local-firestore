@@ -27,7 +27,6 @@ import { callSetMethod } from "./set-methods.js";
 import { callStringMethod } from "./string-methods.js";
 import { callTimestampMethod, callTimestampNamespace } from "./timestamp-methods.js";
 import {
-  type RulesValue,
   isTypeName,
   mkBool,
   mkFloat,
@@ -36,7 +35,7 @@ import {
   mkMap,
   mkNull,
   mkString,
-  toRulesValue,
+  type RulesValue,
 } from "./types.js";
 
 const MAX_CALL_STACK_DEPTH = 20;
@@ -159,7 +158,13 @@ export class RulesEvaluator {
     // namespace アクセスを特別扱い（math.abs 等）
     if (node.object.type === "Identifier") {
       const nsName = node.object.name;
-      if (nsName === "math" || nsName === "timestamp" || nsName === "duration" || nsName === "latlng" || nsName === "hashing") {
+      if (
+        nsName === "math" ||
+        nsName === "timestamp" ||
+        nsName === "duration" ||
+        nsName === "latlng" ||
+        nsName === "hashing"
+      ) {
         // namespace.property はメソッド呼び出しとして CallExpression で処理されるべき
         // ここではプロパティアクセスとして識別子を保持する
         // (実際の呼び出しは evalCall で処理)
@@ -338,7 +343,9 @@ export class RulesEvaluator {
     functions: Map<string, FunctionDeclaration>,
   ): RulesValue {
     if (args.length !== fn.params.length) {
-      throw new Error(`Function ${fn.name} expects ${fn.params.length} arguments, got ${args.length}`);
+      throw new Error(
+        `Function ${fn.name} expects ${fn.params.length} arguments, got ${args.length}`,
+      );
     }
 
     this.callStackDepth++;

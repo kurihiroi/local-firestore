@@ -1,5 +1,8 @@
 import type { DocumentData } from "@local-firestore/shared";
-import { type DocumentResolver, BuiltinFunctionContext } from "./rules-evaluator/builtin-functions.js";
+import {
+  BuiltinFunctionContext,
+  type DocumentResolver,
+} from "./rules-evaluator/builtin-functions.js";
 import type { EvaluationContext, QueryParams } from "./rules-evaluator/context.js";
 import { RulesEvaluator } from "./rules-evaluator/evaluator.js";
 
@@ -195,7 +198,7 @@ export class SecurityRulesEngine {
     // 3. 再帰ワイルドカード（{variableName=**}）
     for (const [pattern, rule] of Object.entries(rules)) {
       const match = WILDCARD_PATTERN.exec(pattern);
-      if (match && match[2]) {
+      if (match?.[2]) {
         const varName = match[1];
         wildcardBindings[varName] = segment;
         return rule;
@@ -237,10 +240,10 @@ export class SecurityRulesEngine {
   private buildFunctionsPrefix(rule: CollectionRule): string {
     let prefix = "";
     if (this.rules.functions) {
-      prefix += this.rules.functions + " ";
+      prefix += `${this.rules.functions} `;
     }
     if (rule.functions) {
-      prefix += rule.functions + " ";
+      prefix += `${rule.functions} `;
     }
     return prefix;
   }
