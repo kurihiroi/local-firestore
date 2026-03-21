@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 import { createDatabase } from "../storage/sqlite.js";
+import { LocalAuthProvider } from "./auth-provider.js";
 import { createAuthRequiredRules, SecurityRulesEngine } from "./rules-engine.js";
 
 function createTestAppWithRules(engine: SecurityRulesEngine) {
   const db = createDatabase(":memory:");
-  return createApp(db, undefined, { securityRules: engine });
+  return createApp(db, undefined, { securityRules: engine, authProvider: new LocalAuthProvider() });
 }
 
 async function request(
