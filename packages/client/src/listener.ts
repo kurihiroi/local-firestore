@@ -59,6 +59,12 @@ function generateSubscriptionId(): string {
   return `sub_${++subscriptionCounter}_${Date.now()}`;
 }
 
+/** パスからドキュメントIDを取得する */
+function getDocIdFromPath(path: string): string {
+  const segments = path.split("/");
+  return segments[segments.length - 1];
+}
+
 /** Firestoreインスタンスごとのスナップショットキャッシュ */
 const snapshotCaches = new WeakMap<Firestore, SnapshotCache>();
 
@@ -71,12 +77,8 @@ function getSnapshotCache(firestore: Firestore): SnapshotCache {
   return cache;
 }
 
-/** メッセージハンドラのセットアップ済みフラグ */
-const handlerSetup = new WeakSet<ConnectionManager>();
-
 function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore): void {
-  if (handlerSetup.has(manager)) return;
-  handlerSetup.add(manager);
+  if (manager.hasMessageHandler) return;
 
   const cache = getSnapshotCache(firestore);
 
@@ -126,8 +128,7 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
         );
 
         const docs = msg.docs.map((d) => {
-          const segments = d.path.split("/");
-          const docId = segments[segments.length - 1];
+          const docId = getDocIdFromPath(d.path);
           if (conv) {
             const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
               d.path,
@@ -149,8 +150,7 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
         });
         const changes: DocumentChange<DocumentData>[] = msg.changes.map(
           (ch: DocumentChangeData) => {
-            const segments = ch.path.split("/");
-            const docId = segments[segments.length - 1];
+            const docId = getDocIdFromPath(ch.path);
             const rawData = ch.data ?? {};
             let docData: DocumentData = rawData;
             if (conv) {

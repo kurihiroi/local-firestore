@@ -1,6 +1,9 @@
 import type { ServerMessage } from "@local-firestore/shared";
 import type { Firestore } from "./types.js";
 
+/** WebSocket readyState: OPEN */
+const WS_OPEN = 1;
+
 /** 接続状態 */
 export type ConnectionState = "connected" | "disconnected" | "reconnecting";
 
@@ -69,6 +72,11 @@ export class ConnectionManager {
     return () => this.stateListeners.delete(listener);
   }
 
+  /** メッセージハンドラが設定済みか */
+  get hasMessageHandler(): boolean {
+    return this.messageHandler !== null;
+  }
+
   /** メッセージハンドラを設定 */
   setMessageHandler(handler: (msg: ServerMessage) => void): void {
     this.messageHandler = handler;
@@ -76,7 +84,7 @@ export class ConnectionManager {
 
   /** WebSocket接続を確立する */
   connect(): WebSocket {
-    if (this.ws && this.ws.readyState <= 1) {
+    if (this.ws && this.ws.readyState <= WS_OPEN) {
       return this.ws;
     }
 
@@ -126,7 +134,7 @@ export class ConnectionManager {
 
   /** メッセージを送信する（接続中ならキューして接続後に送信） */
   send(data: string): void {
-    if (this.ws?.readyState === 1) {
+    if (this.ws?.readyState === WS_OPEN) {
       this.ws.send(data);
     } else {
       const ws = this.ws ?? this.connect();
@@ -144,7 +152,7 @@ export class ConnectionManager {
   removeSubscription(id: string): void {
     this.subscriptions.delete(id);
     const unsubMsg = JSON.stringify({ type: "unsubscribe", subscriptionId: id });
-    if (this.ws?.readyState === 1) {
+    if (this.ws?.readyState === WS_OPEN) {
       this.ws.send(unsubMsg);
     }
   }

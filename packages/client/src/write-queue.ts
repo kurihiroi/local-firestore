@@ -1,4 +1,4 @@
-import type { DocumentData } from "@local-firestore/shared";
+import type { DocumentData, SetOptions } from "@local-firestore/shared";
 import type { HttpTransport } from "./transport.js";
 
 /** キューに入れる書き込み操作の種別 */
@@ -10,7 +10,7 @@ export interface QueuedWrite {
   type: WriteOperationType;
   path: string;
   data?: DocumentData;
-  options?: Record<string, unknown>;
+  options?: SetOptions;
   timestamp: number;
   retryCount: number;
 }
@@ -57,7 +57,7 @@ export class WriteQueue {
     type: WriteOperationType,
     path: string,
     data?: DocumentData,
-    options?: Record<string, unknown>,
+    options?: SetOptions,
   ): QueuedWrite {
     const write: QueuedWrite = {
       id: `wq_${++queueIdCounter}_${Date.now()}`,
