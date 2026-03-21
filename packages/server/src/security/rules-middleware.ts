@@ -5,12 +5,31 @@ import type { AuthContext, Operation, SecurityRulesEngine } from "./rules-engine
 /**
  * リクエストからAuthContextを抽出する
  * Authorization: Bearer <uid> 形式のヘッダーを解析する（簡易実装）
+ *
+ * 拡張形式: Bearer <uid>:<json_claims> でカスタムクレームも渡せる
  */
 function extractAuth(authHeader: string | undefined): AuthContext | null {
   if (!authHeader) return null;
   const match = authHeader.match(/^Bearer\s+(.+)$/);
   if (!match) return null;
-  return { uid: match[1] };
+
+  const payload = match[1];
+
+  // uid:json_claims 形式のサポート
+  const colonIndex = payload.indexOf(":");
+  if (colonIndex > 0) {
+    const uid = payload.slice(0, colonIndex);
+    const claimsStr = payload.slice(colonIndex + 1);
+    try {
+      const claims = JSON.parse(claimsStr) as Record<string, unknown>;
+      return { uid, token: claims };
+    } catch {
+      // JSON パース失敗時は uid のみ
+      return { uid };
+    }
+  }
+
+  return { uid: payload };
 }
 
 /**
@@ -78,6 +97,7 @@ export function securityRulesMiddleware(engine: SecurityRulesEngine): Middleware
       path: docPath,
       documentId,
       collectionPath,
+      requestTime: new Date(),
     });
 
     if (!result.allowed) {
