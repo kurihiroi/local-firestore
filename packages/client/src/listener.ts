@@ -6,7 +6,9 @@ import type {
   SerializedQueryConstraint,
   ServerMessage,
 } from "@local-firestore/shared";
+import { type ConnectionManager, getConnectionManager } from "./connection.js";
 import type { Query } from "./query.js";
+import { SnapshotCache } from "./snapshot-cache.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
 import type {
@@ -30,9 +32,6 @@ export interface DocumentChange<T = DocumentData> {
   readonly oldIndex: number;
   readonly newIndex: number;
 }
-
-/** WebSocket接続をFirestoreインスタンスごとに管理する */
-const wsConnections = new WeakMap<Firestore, WebSocket>();
 
 /** サブスクリプションIDごとのコールバック */
 interface DocCallback<T = DocumentData> {
@@ -60,18 +59,28 @@ function generateSubscriptionId(): string {
   return `sub_${++subscriptionCounter}_${Date.now()}`;
 }
 
-function getOrCreateWebSocket(firestore: Firestore): WebSocket {
-  let ws = wsConnections.get(firestore);
-  if (ws && ws.readyState <= 1 /* CONNECTING or OPEN */) {
-    return ws;
+/** Firestoreインスタンスごとのスナップショットキャッシュ */
+const snapshotCaches = new WeakMap<Firestore, SnapshotCache>();
+
+function getSnapshotCache(firestore: Firestore): SnapshotCache {
+  let cache = snapshotCaches.get(firestore);
+  if (!cache) {
+    cache = new SnapshotCache();
+    snapshotCaches.set(firestore, cache);
   }
+  return cache;
+}
 
-  const transport = firestore._transport;
-  const wsUrl = transport.getWebSocketUrl();
-  ws = new WebSocket(wsUrl);
+/** メッセージハンドラのセットアップ済みフラグ */
+const handlerSetup = new WeakSet<ConnectionManager>();
 
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(String(event.data)) as ServerMessage;
+function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore): void {
+  if (handlerSetup.has(manager)) return;
+  handlerSetup.add(manager);
+
+  const cache = getSnapshotCache(firestore);
+
+  manager.setMessageHandler((msg: ServerMessage) => {
     const cb = subscriptionCallbacks.get(msg.subscriptionId);
     if (!cb) return;
 
@@ -79,6 +88,10 @@ function getOrCreateWebSocket(firestore: Firestore): WebSocket {
       case "doc_snapshot": {
         if (cb.kind !== "doc") break;
         const docCb = cb as DocCallback<unknown>;
+
+        // キャッシュに保存
+        cache.putDocument(msg.path, msg.exists, msg.data, msg.createTime, msg.updateTime);
+
         let data: DocumentData | null = msg.exists ? (msg.data as DocumentData) : null;
         if (data && docCb.converter) {
           const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
@@ -98,6 +111,20 @@ function getOrCreateWebSocket(firestore: Firestore): WebSocket {
         if (cb.kind !== "query") break;
         const queryCb = cb as QueryCallback<unknown>;
         const conv = queryCb.converter;
+
+        // クエリ結果をキャッシュ
+        cache.putQuery(
+          msg.subscriptionId,
+          msg.docs.map((d) => ({
+            path: d.path,
+            exists: true,
+            data: d.data,
+            createTime: d.createTime,
+            updateTime: d.updateTime,
+            cachedAt: Date.now(),
+          })),
+        );
+
         const docs = msg.docs.map((d) => {
           const segments = d.path.split("/");
           const docId = segments[segments.length - 1];
@@ -166,18 +193,7 @@ function getOrCreateWebSocket(firestore: Firestore): WebSocket {
         break;
       }
     }
-  };
-
-  wsConnections.set(firestore, ws);
-  return ws;
-}
-
-function sendWhenReady(ws: WebSocket, data: string): void {
-  if (ws.readyState === 1 /* OPEN */) {
-    ws.send(data);
-  } else {
-    ws.addEventListener("open", () => ws.send(data), { once: true });
-  }
+  });
 }
 
 /**
@@ -189,7 +205,10 @@ export function onSnapshotDoc<T = DocumentData>(
   onError?: (error: FirestoreError) => void,
 ): Unsubscribe {
   const firestore = ref._firestore;
-  const ws = getOrCreateWebSocket(firestore);
+  const manager = getConnectionManager(firestore);
+  ensureMessageHandler(manager, firestore);
+  manager.connect();
+
   const subscriptionId = generateSubscriptionId();
 
   subscriptionCallbacks.set(subscriptionId, {
@@ -200,20 +219,17 @@ export function onSnapshotDoc<T = DocumentData>(
     converter: ref._converter as FirestoreDataConverter<unknown> | null,
   });
 
-  sendWhenReady(
-    ws,
-    JSON.stringify({
-      type: "subscribe_doc",
-      subscriptionId,
-      path: ref.path,
-    }),
-  );
+  const message = JSON.stringify({
+    type: "subscribe_doc",
+    subscriptionId,
+    path: ref.path,
+  });
+
+  manager.registerSubscription(subscriptionId, message);
 
   return () => {
     subscriptionCallbacks.delete(subscriptionId);
-    if (ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: "unsubscribe", subscriptionId }));
-    }
+    manager.removeSubscription(subscriptionId);
   };
 }
 
@@ -226,7 +242,10 @@ export function onSnapshotQuery<T = DocumentData>(
   onError?: (error: FirestoreError) => void,
 ): Unsubscribe {
   const firestore = queryOrRef._firestore;
-  const ws = getOrCreateWebSocket(firestore);
+  const manager = getConnectionManager(firestore);
+  ensureMessageHandler(manager, firestore);
+  manager.connect();
+
   const subscriptionId = generateSubscriptionId();
 
   subscriptionCallbacks.set(subscriptionId, {
@@ -250,22 +269,19 @@ export function onSnapshotQuery<T = DocumentData>(
     constraints = queryOrRef.constraints;
   }
 
-  sendWhenReady(
-    ws,
-    JSON.stringify({
-      type: "subscribe_query",
-      subscriptionId,
-      collectionPath,
-      collectionGroup,
-      constraints,
-    }),
-  );
+  const message = JSON.stringify({
+    type: "subscribe_query",
+    subscriptionId,
+    collectionPath,
+    collectionGroup,
+    constraints,
+  });
+
+  manager.registerSubscription(subscriptionId, message);
 
   return () => {
     subscriptionCallbacks.delete(subscriptionId);
-    if (ws.readyState === 1) {
-      ws.send(JSON.stringify({ type: "unsubscribe", subscriptionId }));
-    }
+    manager.removeSubscription(subscriptionId);
   };
 }
 
@@ -301,4 +317,19 @@ export function onSnapshot<T = DocumentData>(
     onNext as (snapshot: QuerySnapshot<T>) => void,
     onError,
   );
+}
+
+/**
+ * onSnapshotsInSync - 接続状態の同期リスナー
+ *
+ * 全てのスナップショットが同期されたときに呼ばれるリスナーを設定する。
+ * 再接続後にサーバーからの初回スナップショットが全て受信された時点で通知される。
+ */
+export function onSnapshotsInSync(firestore: Firestore, callback: () => void): Unsubscribe {
+  const manager = getConnectionManager(firestore);
+  return manager.addStateListener((state) => {
+    if (state === "connected") {
+      callback();
+    }
+  });
 }
