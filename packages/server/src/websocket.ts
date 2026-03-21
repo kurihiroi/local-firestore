@@ -1,5 +1,9 @@
 import type { Server as HttpServer } from "node:http";
-import type { ClientMessage, DocumentMetadata } from "@local-firestore/shared";
+import type {
+  ClientMessage,
+  DocumentMetadata,
+  SnapshotErrorMessage,
+} from "@local-firestore/shared";
 import { WebSocketServer } from "ws";
 import type { ListenerManager } from "./services/listener-manager.js";
 
@@ -20,14 +24,13 @@ export function attachWebSocket(server: HttpServer, deps: WebSocketDeps): WebSoc
       try {
         msg = JSON.parse(String(raw)) as ClientMessage;
       } catch {
-        ws.send(
-          JSON.stringify({
-            type: "error",
-            subscriptionId: "",
-            code: "invalid-argument",
-            message: "Invalid JSON",
-          }),
-        );
+        const errorMsg: SnapshotErrorMessage = {
+          type: "error",
+          subscriptionId: "",
+          code: "invalid-argument",
+          message: "Invalid JSON",
+        };
+        ws.send(JSON.stringify(errorMsg));
         return;
       }
 

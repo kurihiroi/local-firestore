@@ -1,4 +1,5 @@
 import type { DocumentData, FirestoreDataConverter } from "@local-firestore/shared";
+import { FirestoreError } from "./transport.js";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 
 /**
@@ -19,7 +20,8 @@ export function doc<T = DocumentData>(
   if (parent.type === "firestore") {
     const segments = fullPath.split("/");
     if (segments.length < 2 || segments.length % 2 !== 0) {
-      throw new Error(
+      throw new FirestoreError(
+        "invalid-argument",
         `Invalid document path: "${fullPath}". Document paths must have an even number of segments.`,
       );
     }
@@ -54,7 +56,8 @@ export function collection<T = DocumentData>(
   if (parent.type === "firestore") {
     const segments = fullPath.split("/");
     if (segments.length % 2 !== 1) {
-      throw new Error(
+      throw new FirestoreError(
+        "invalid-argument",
         `Invalid collection path: "${fullPath}". Collection paths must have an odd number of segments.`,
       );
     }

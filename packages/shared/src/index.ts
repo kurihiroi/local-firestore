@@ -40,6 +40,7 @@ export type {
   FieldValueSentinel,
   FieldValueType,
   FirestoreDataConverter,
+  FirestoreErrorCode,
   OrderByDirection,
   PartialWithFieldValue,
   QueryConstraintType,

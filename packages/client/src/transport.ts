@@ -1,3 +1,5 @@
+import type { FirestoreErrorCode } from "@local-firestore/shared";
+
 export class HttpTransport {
   private baseUrl: string;
   private wsUrl: string;
@@ -69,18 +71,23 @@ export class HttpTransport {
 
   private async handleError(res: Response): Promise<never> {
     const body = await res.json().catch(() => ({}));
-    const code = (body as Record<string, string>).code ?? "unknown";
+    const code = ((body as Record<string, string>).code ?? "unknown") as FirestoreErrorCode;
     const message = (body as Record<string, string>).message ?? res.statusText;
-    throw new FirestoreClientError(code, message);
+    throw new FirestoreError(code, message);
   }
 }
 
-export class FirestoreClientError extends Error {
+/**
+ * Firebase互換のFirestoreErrorクラス
+ *
+ * firebase/firestoreの `FirestoreError` と同じインターフェースを提供する。
+ */
+export class FirestoreError extends Error {
+  readonly name = "FirestoreError";
   constructor(
-    readonly code: string,
+    readonly code: FirestoreErrorCode,
     message: string,
   ) {
     super(message);
-    this.name = "FirestoreClientError";
   }
 }
