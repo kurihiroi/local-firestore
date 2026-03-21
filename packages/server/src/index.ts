@@ -4,6 +4,9 @@ export type { LogEntry, LogLevel, LogOutput } from "./middleware/logger.js";
 export { ConsoleLogOutput, JsonLogOutput, Logger, requestLogger } from "./middleware/logger.js";
 export type { ServerMetrics } from "./middleware/metrics.js";
 export { MetricsCollector, metricsMiddleware } from "./middleware/metrics.js";
+export type { AuthProvider } from "./security/auth-provider.js";
+export { LocalAuthProvider } from "./security/auth-provider.js";
+export { FirebaseAuthProvider } from "./security/firebase-auth-provider.js";
 export type {
   AuthContext,
   CollectionRule,

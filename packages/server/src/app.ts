@@ -8,6 +8,7 @@ import { createBatchRoutes } from "./routes/batch.js";
 import { createDataRoutes } from "./routes/data.js";
 import { createDocumentRoutes } from "./routes/documents.js";
 import { createQueryRoutes } from "./routes/query.js";
+import type { AuthProvider } from "./security/auth-provider.js";
 import type { SecurityRulesEngine } from "./security/rules-engine.js";
 import { securityRulesMiddleware } from "./security/rules-middleware.js";
 import { DocumentService } from "./services/document.js";
@@ -20,6 +21,7 @@ export interface AppOptions {
   logger?: Logger;
   metricsCollector?: MetricsCollector;
   securityRules?: SecurityRulesEngine;
+  authProvider?: AuthProvider;
 }
 
 export function createApp(
@@ -52,8 +54,8 @@ export function createApp(
   app.use("*", cors());
 
   // セキュリティルール
-  if (options?.securityRules) {
-    app.use("*", securityRulesMiddleware(options.securityRules));
+  if (options?.securityRules && options?.authProvider) {
+    app.use("*", securityRulesMiddleware(options.securityRules, options.authProvider));
   }
 
   // ヘルスチェック
