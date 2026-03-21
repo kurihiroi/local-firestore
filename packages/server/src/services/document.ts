@@ -1,4 +1,4 @@
-import type { DocumentData, DocumentMetadata } from "@local-firestore/shared";
+import type { DocumentData, DocumentMetadata, FirestoreErrorCode } from "@local-firestore/shared";
 import { isFieldValueSentinel } from "@local-firestore/shared";
 import type { DocumentRepository } from "../storage/repository.js";
 import { generateDocumentId } from "../utils/id.js";
@@ -120,7 +120,7 @@ export class DocumentService {
 }
 
 export class DocumentNotFoundError extends Error {
-  readonly code = "not-found";
+  readonly code: FirestoreErrorCode = "not-found";
   constructor(path: string) {
     super(`Document not found: ${path}`);
     this.name = "DocumentNotFoundError";

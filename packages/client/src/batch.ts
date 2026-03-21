@@ -4,6 +4,7 @@ import type {
   DocumentData,
   WithFieldValue,
 } from "@local-firestore/shared";
+import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
 
 /** WriteBatchオブジェクトを作成する */
@@ -19,7 +20,7 @@ export class WriteBatch {
 
   private ensureNotCommitted(): void {
     if (this.committed) {
-      throw new Error("WriteBatch has already been committed");
+      throw new FirestoreError("failed-precondition", "WriteBatch has already been committed");
     }
   }
 

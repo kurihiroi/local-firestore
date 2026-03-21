@@ -1,10 +1,44 @@
+/**
+ * Firebase互換のエラーコード型
+ * gRPCステータスコードに基づく
+ */
+export type FirestoreErrorCode =
+  | "cancelled"
+  | "unknown"
+  | "invalid-argument"
+  | "deadline-exceeded"
+  | "not-found"
+  | "already-exists"
+  | "permission-denied"
+  | "resource-exhausted"
+  | "failed-precondition"
+  | "aborted"
+  | "out-of-range"
+  | "unimplemented"
+  | "internal"
+  | "unavailable"
+  | "data-loss"
+  | "unauthenticated";
+
 /** Firestoreエラーコード定数 */
 export const ERROR_CODES = {
-  ABORTED: "aborted",
-  NOT_FOUND: "not-found",
-  DEADLINE_EXCEEDED: "deadline-exceeded",
+  CANCELLED: "cancelled",
+  UNKNOWN: "unknown",
   INVALID_ARGUMENT: "invalid-argument",
-} as const;
+  DEADLINE_EXCEEDED: "deadline-exceeded",
+  NOT_FOUND: "not-found",
+  ALREADY_EXISTS: "already-exists",
+  PERMISSION_DENIED: "permission-denied",
+  RESOURCE_EXHAUSTED: "resource-exhausted",
+  FAILED_PRECONDITION: "failed-precondition",
+  ABORTED: "aborted",
+  OUT_OF_RANGE: "out-of-range",
+  UNIMPLEMENTED: "unimplemented",
+  INTERNAL: "internal",
+  UNAVAILABLE: "unavailable",
+  DATA_LOSS: "data-loss",
+  UNAUTHENTICATED: "unauthenticated",
+} as const satisfies Record<string, FirestoreErrorCode>;
 
 /** Firestoreドキュメントのデータ型 */
 export interface DocumentData {

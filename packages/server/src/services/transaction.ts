@@ -1,4 +1,4 @@
-import type { BatchOperation, DocumentMetadata } from "@local-firestore/shared";
+import type { BatchOperation, DocumentMetadata, FirestoreErrorCode } from "@local-firestore/shared";
 import type Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import { DocumentRepository } from "../storage/repository.js";
@@ -119,7 +119,7 @@ export class TransactionService {
 }
 
 export class TransactionConflictError extends Error {
-  readonly code = "aborted";
+  readonly code: FirestoreErrorCode = "aborted";
   constructor(path: string) {
     super(`Transaction conflict on document: ${path}`);
     this.name = "TransactionConflictError";
@@ -127,7 +127,7 @@ export class TransactionConflictError extends Error {
 }
 
 export class TransactionNotFoundError extends Error {
-  readonly code = "not-found";
+  readonly code: FirestoreErrorCode = "not-found";
   constructor(transactionId: string) {
     super(`Transaction not found: ${transactionId}`);
     this.name = "TransactionNotFoundError";
@@ -135,7 +135,7 @@ export class TransactionNotFoundError extends Error {
 }
 
 export class TransactionExpiredError extends Error {
-  readonly code = "deadline-exceeded";
+  readonly code: FirestoreErrorCode = "deadline-exceeded";
   constructor(transactionId: string) {
     super(`Transaction expired: ${transactionId}`);
     this.name = "TransactionExpiredError";

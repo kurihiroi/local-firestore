@@ -2,11 +2,13 @@ import type {
   DocumentChangeData,
   DocumentData,
   FirestoreDataConverter,
+  FirestoreErrorCode,
   SerializedQueryConstraint,
   ServerMessage,
 } from "@local-firestore/shared";
 import type { Query } from "./query.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
+import { FirestoreError } from "./transport.js";
 import type {
   CollectionReference,
   DocumentReference,
@@ -36,7 +38,7 @@ const wsConnections = new WeakMap<Firestore, WebSocket>();
 interface DocCallback<T = DocumentData> {
   kind: "doc";
   onNext: (snapshot: DocumentSnapshot<T>) => void;
-  onError?: (error: Error) => void;
+  onError?: (error: FirestoreError) => void;
   ref: DocumentReference<T>;
   converter: FirestoreDataConverter<T> | null;
 }
@@ -44,7 +46,7 @@ interface DocCallback<T = DocumentData> {
 interface QueryCallback<T = DocumentData> {
   kind: "query";
   onNext: (snapshot: QuerySnapshot<T>) => void;
-  onError?: (error: Error) => void;
+  onError?: (error: FirestoreError) => void;
   converter: FirestoreDataConverter<T> | null;
 }
 
@@ -153,12 +155,13 @@ function getOrCreateWebSocket(firestore: Firestore): WebSocket {
         break;
       }
       case "error": {
+        const error = new FirestoreError(msg.code as FirestoreErrorCode, msg.message);
         if (cb.kind === "doc") {
           const docCb = cb as DocCallback<unknown>;
-          docCb.onError?.(new Error(`[${msg.code}] ${msg.message}`));
+          docCb.onError?.(error);
         } else {
           const queryCb = cb as QueryCallback<unknown>;
-          queryCb.onError?.(new Error(`[${msg.code}] ${msg.message}`));
+          queryCb.onError?.(error);
         }
         break;
       }
@@ -183,7 +186,7 @@ function sendWhenReady(ws: WebSocket, data: string): void {
 export function onSnapshotDoc<T = DocumentData>(
   ref: DocumentReference<T>,
   onNext: (snapshot: DocumentSnapshot<T>) => void,
-  onError?: (error: Error) => void,
+  onError?: (error: FirestoreError) => void,
 ): Unsubscribe {
   const firestore = ref._firestore;
   const ws = getOrCreateWebSocket(firestore);
@@ -220,7 +223,7 @@ export function onSnapshotDoc<T = DocumentData>(
 export function onSnapshotQuery<T = DocumentData>(
   queryOrRef: Query<T> | CollectionReference<T>,
   onNext: (snapshot: QuerySnapshot<T>) => void,
-  onError?: (error: Error) => void,
+  onError?: (error: FirestoreError) => void,
 ): Unsubscribe {
   const firestore = queryOrRef._firestore;
   const ws = getOrCreateWebSocket(firestore);
@@ -274,17 +277,17 @@ export function onSnapshotQuery<T = DocumentData>(
 export function onSnapshot<T = DocumentData>(
   ref: DocumentReference<T>,
   onNext: (snapshot: DocumentSnapshot<T>) => void,
-  onError?: (error: Error) => void,
+  onError?: (error: FirestoreError) => void,
 ): Unsubscribe;
 export function onSnapshot<T = DocumentData>(
   query: Query<T> | CollectionReference<T>,
   onNext: (snapshot: QuerySnapshot<T>) => void,
-  onError?: (error: Error) => void,
+  onError?: (error: FirestoreError) => void,
 ): Unsubscribe;
 export function onSnapshot<T = DocumentData>(
   target: DocumentReference<T> | Query<T> | CollectionReference<T>,
   onNext: ((snapshot: DocumentSnapshot<T>) => void) | ((snapshot: QuerySnapshot<T>) => void),
-  onError?: (error: Error) => void,
+  onError?: (error: FirestoreError) => void,
 ): Unsubscribe {
   if (target.type === "document") {
     return onSnapshotDoc(

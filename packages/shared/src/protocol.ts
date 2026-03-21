@@ -1,6 +1,7 @@
 import type {
   DocumentData,
   FieldValueSentinel,
+  FirestoreErrorCode,
   SerializedAggregateSpec,
   SerializedQueryConstraint,
   SetOptions,
@@ -144,7 +145,7 @@ export interface TransactionRollbackRequest {
 
 /** エラーレスポンス */
 export interface ErrorResponse {
-  code: string;
+  code: FirestoreErrorCode;
   message: string;
 }
 
@@ -214,7 +215,7 @@ export interface QuerySnapshotMessage {
 export interface SnapshotErrorMessage {
   type: "error";
   subscriptionId: string;
-  code: string;
+  code: FirestoreErrorCode;
   message: string;
 }
 

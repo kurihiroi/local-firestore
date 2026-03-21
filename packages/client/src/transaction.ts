@@ -8,6 +8,7 @@ import type {
 } from "@local-firestore/shared";
 import { ERROR_CODES } from "@local-firestore/shared";
 import { QueryDocumentSnapshot } from "./snapshots.js";
+import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
 import { DocumentSnapshot } from "./types.js";
 
@@ -43,8 +44,7 @@ export async function runTransaction<T>(
       // コンフリクトならリトライ
       await transport.post("/transaction/rollback", { transactionId }).catch(() => {});
 
-      const isConflict =
-        e instanceof Error && "code" in e && (e as { code: string }).code === ERROR_CODES.ABORTED;
+      const isConflict = e instanceof FirestoreError && e.code === ERROR_CODES.ABORTED;
       if (isConflict && attempt < maxAttempts - 1) {
         continue;
       }
