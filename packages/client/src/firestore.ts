@@ -21,3 +21,13 @@ export function getFirestore(settings?: FirestoreSettings): Firestore {
     _transport: transport,
   };
 }
+
+/**
+ * initializeFirestore - Firebase互換の初期化関数
+ *
+ * `getFirestore` と同じ機能だが、Firebase SDKの `initializeFirestore` と
+ * 同じシグネチャを持つ。`app` パラメータは互換性のために受け取るが無視する。
+ */
+export function initializeFirestore(_app: unknown, settings: FirestoreSettings): Firestore {
+  return getFirestore(settings);
+}

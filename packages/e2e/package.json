@@ -1,0 +1,18 @@
+{
+  "name": "@local-firestore/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@local-firestore/client": "workspace:*",
+    "@local-firestore/server": "workspace:*",
+    "@local-firestore/shared": "workspace:*",
+    "@hono/node-server": "^1.14.3",
+    "hono": "^4.7.9"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
