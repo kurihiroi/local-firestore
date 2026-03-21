@@ -91,7 +91,7 @@ export class RulesEvaluator {
       case "FloatLiteral":
         return mkFloat(node.value);
       case "StringLiteral":
-        return mkString(node.value);
+        return mkString(this.interpolatePathVariables(node.value, scope));
       case "NullLiteral":
         return mkNull();
       case "ListExpression":
@@ -418,6 +418,52 @@ export class RulesEvaluator {
     return test.value
       ? this.eval(node.consequent, scope, functions)
       : this.eval(node.alternate, scope, functions);
+  }
+
+  /**
+   * 文字列中の $(variable) パターンをスコープの値で置換する。
+   * $(database) や $(request.auth.uid) のようなドット区切りのメンバーアクセスにも対応。
+   */
+  private interpolatePathVariables(str: string, scope: Map<string, RulesValue>): string {
+    if (!str.includes("$(")) return str;
+
+    return str.replace(/\$\(([^)]+)\)/g, (_match, expr: string) => {
+      const parts = expr.trim().split(".");
+      const rootName = parts[0];
+
+      let current = scope.get(rootName);
+      if (current === undefined) {
+        throw new Error(`Undefined variable in path interpolation: ${rootName}`);
+      }
+
+      for (let i = 1; i < parts.length; i++) {
+        if (current.typeName === "map") {
+          const val = current.value.get(parts[i]);
+          if (val === undefined) {
+            throw new Error(`Property '${parts[i]}' not found in ${parts.slice(0, i).join(".")}`);
+          }
+          current = val;
+        } else {
+          throw new Error(
+            `Cannot access property '${parts[i]}' on ${current.typeName} in path interpolation`,
+          );
+        }
+      }
+
+      switch (current.typeName) {
+        case "string":
+          return current.value;
+        case "int":
+        case "float":
+          return String(current.value);
+        case "bool":
+          return String(current.value);
+        case "path":
+          return current.value;
+        default:
+          throw new Error(`Cannot interpolate ${current.typeName} in path`);
+      }
+    });
   }
 
   private evalIs(
