@@ -13,7 +13,10 @@ describe("Document Routes", () => {
     it("ヘルスチェックが成功する", async () => {
       const res = await request(app, "GET", "/health");
       expect(res.status).toBe(200);
-      expect(await jsonBody(res)).toEqual({ status: "ok" });
+      const body = await jsonBody<{ status: string; database: string; uptime: number }>(res);
+      expect(body.status).toBe("ok");
+      expect(body.database).toBe("ok");
+      expect(body.uptime).toBeGreaterThanOrEqual(0);
     });
   });
 
