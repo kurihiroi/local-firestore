@@ -3,6 +3,7 @@ export type {
   FirestoreDataConverter,
   FirestoreErrorCode,
   PartialWithFieldValue,
+  SetOptions,
   WithFieldValue,
 } from "@local-firestore/shared";
 // Aggregate
@@ -18,6 +19,8 @@ export {
 } from "./aggregate.js";
 // Batch & Transaction
 export { WriteBatch, writeBatch } from "./batch.js";
+// Data types
+export { Bytes } from "./bytes.js";
 // CRUD operations
 export { addDoc, deleteDoc, getDoc, setDoc, updateDoc } from "./crud.js";
 // FieldValue helpers
@@ -30,6 +33,7 @@ export {
 } from "./field-values.js";
 export type { FirestoreSettings } from "./firestore.js";
 export { getFirestore } from "./firestore.js";
+export { GeoPoint } from "./geo-point.js";
 // Real-time listeners
 export type { DocumentChange, DocumentChangeType, Unsubscribe } from "./listener.js";
 export { onSnapshot } from "./listener.js";

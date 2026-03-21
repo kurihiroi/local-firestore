@@ -7,7 +7,9 @@ export class DocumentRepository {
     insert: Database.Statement;
     update: Database.Statement;
     delete: Database.Statement;
+    deleteAll: Database.Statement;
     listCollection: Database.Statement;
+    listAll: Database.Statement;
   };
 
   constructor(db: Database.Database) {
@@ -23,7 +25,9 @@ export class DocumentRepository {
         WHERE path = @path
       `),
       delete: db.prepare("DELETE FROM documents WHERE path = ?"),
+      deleteAll: db.prepare("DELETE FROM documents"),
       listCollection: db.prepare("SELECT * FROM documents WHERE collection_path = ?"),
+      listAll: db.prepare("SELECT * FROM documents ORDER BY path"),
     };
   }
 
@@ -78,6 +82,16 @@ export class DocumentRepository {
   listCollection(collectionPath: string): DocumentMetadata[] {
     const rows = this.stmts.listCollection.all(collectionPath) as RawRow[];
     return rows.map(toMetadata);
+  }
+
+  listAll(): DocumentMetadata[] {
+    const rows = this.stmts.listAll.all() as RawRow[];
+    return rows.map(toMetadata);
+  }
+
+  deleteAll(): number {
+    const result = this.stmts.deleteAll.run();
+    return result.changes;
   }
 }
 

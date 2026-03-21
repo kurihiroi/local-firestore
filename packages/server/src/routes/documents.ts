@@ -69,7 +69,7 @@ export function createDocumentRoutes(
     }
 
     const body = await c.req.json<SetDocumentRequest>();
-    documentService.setDocument(path, body.data);
+    documentService.setDocument(path, body.data, body.options);
     onDocumentChange?.(path);
     return c.json({ success: true });
   });

@@ -57,6 +57,18 @@ export interface SerializedTimestamp {
   value: { seconds: number; nanoseconds: number };
 }
 
+/** シリアライズされたGeoPoint */
+export interface SerializedGeoPoint {
+  __type: "geopoint";
+  value: { latitude: number; longitude: number };
+}
+
+/** シリアライズされたBytes */
+export interface SerializedBytes {
+  __type: "bytes";
+  value: string; // Base64エンコードされたバイナリデータ
+}
+
 /** FieldValueセンチネルの種別 */
 export type FieldValueType =
   | "serverTimestamp"
