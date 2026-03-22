@@ -77,6 +77,7 @@ export class Transaction {
         res.data as DocumentData,
         res.createTime ?? "",
         res.updateTime ?? "",
+        ref._firestore,
       );
       const converted = ref._converter.fromFirestore(rawSnapshot);
       return new DocumentSnapshot<T>(ref, converted as T, res.createTime, res.updateTime);

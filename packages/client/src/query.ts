@@ -10,6 +10,7 @@ import type {
 } from "@local-firestore/shared";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 import type { CollectionReference, Firestore } from "./types.js";
+import { FieldPath } from "./types.js";
 
 // ============================================================
 // Query型
@@ -37,6 +38,15 @@ export interface Query<T = DocumentData> {
 export interface QueryConstraint {
   readonly _serialized: SerializedQueryConstraint;
 }
+
+/** クエリ制約の種別リテラル型 */
+export type { QueryConstraintType } from "@local-firestore/shared";
+
+/** フィルタ制約のユニオン型 */
+export type QueryFilterConstraint = QueryConstraint;
+
+/** 非フィルタ制約のユニオン型 */
+export type QueryNonFilterConstraint = QueryConstraint;
 
 /** @internal Queryオブジェクトを生成する */
 function createQuery<T>(
@@ -103,10 +113,20 @@ export function collectionGroup<T = DocumentData>(
   return createQuery<T>(collectionId, true, [], firestore, null);
 }
 
+/** ドキュメントIDを指す特殊フィールドを返す（where フィルタ用） */
+export function documentId(): FieldPath {
+  return FieldPath.documentId();
+}
+
 /** whereフィルタ制約を作成する */
-export function where(fieldPath: string, op: WhereFilterOp, value: unknown): QueryConstraint {
+export function where(
+  fieldPath: string | FieldPath,
+  op: WhereFilterOp,
+  value: unknown,
+): QueryConstraint {
+  const fieldStr = fieldPath instanceof FieldPath ? fieldPath.toString() : fieldPath;
   return {
-    _serialized: { type: "where", fieldPath, op, value },
+    _serialized: { type: "where", fieldPath: fieldStr, op, value },
   };
 }
 
@@ -195,6 +215,7 @@ export async function getDocs<T = DocumentData>(
   const res = await transport.post<QueryResponse>("/query", body);
   const converter = q._converter;
 
+  const firestore = q._firestore;
   const docs = res.docs.map((d) => {
     const segments = d.path.split("/");
     const docId = segments[segments.length - 1];
@@ -205,6 +226,7 @@ export async function getDocs<T = DocumentData>(
         d.data,
         d.createTime,
         d.updateTime,
+        firestore,
       );
       const converted = converter.fromFirestore(rawSnapshot);
       return new QueryDocumentSnapshot<T>(
@@ -213,10 +235,18 @@ export async function getDocs<T = DocumentData>(
         converted as T,
         d.createTime,
         d.updateTime,
+        firestore,
       );
     }
-    return new QueryDocumentSnapshot<T>(d.path, docId, d.data as T, d.createTime, d.updateTime);
+    return new QueryDocumentSnapshot<T>(
+      d.path,
+      docId,
+      d.data as T,
+      d.createTime,
+      d.updateTime,
+      firestore,
+    );
   });
 
-  return new QuerySnapshot<T>(docs);
+  return new QuerySnapshot<T>(docs, undefined, queryOrRef);
 }

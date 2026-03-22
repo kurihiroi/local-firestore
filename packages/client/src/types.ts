@@ -10,6 +10,8 @@ export interface Firestore {
   readonly type: "firestore";
   /** @internal */
   readonly _transport: HttpTransport;
+  /** @internal データベースID（マルチデータベース対応） */
+  readonly _databaseId?: string;
 }
 
 /** ドキュメントリファレンス */
@@ -18,6 +20,10 @@ export interface DocumentReference<T = DocumentData> {
   readonly id: string;
   readonly path: string;
   readonly parent: CollectionReference<T>;
+  /** Firestore インスタンス */
+  readonly firestore: Firestore;
+  /** データコンバーター */
+  readonly converter: FirestoreDataConverter<T> | null;
   /** @internal */
   readonly _firestore: Firestore;
   /** @internal */
@@ -34,6 +40,10 @@ export interface CollectionReference<T = DocumentData> {
   readonly id: string;
   readonly path: string;
   readonly parent: DocumentReference | null;
+  /** Firestore インスタンス */
+  readonly firestore: Firestore;
+  /** データコンバーター */
+  readonly converter: FirestoreDataConverter<T> | null;
   /** @internal */
   readonly _firestore: Firestore;
   /** @internal */
@@ -44,6 +54,26 @@ export interface CollectionReference<T = DocumentData> {
   withConverter(converter: null): CollectionReference<DocumentData>;
 }
 
+/** スナップショットデータ取得オプション */
+export interface SnapshotOptions {
+  readonly serverTimestamps?: "estimate" | "previous" | "none";
+}
+
+/** スナップショットのメタデータ */
+export class SnapshotMetadata {
+  constructor(
+    readonly hasPendingWrites: boolean,
+    readonly fromCache: boolean,
+  ) {}
+
+  isEqual(other: SnapshotMetadata): boolean {
+    return this.hasPendingWrites === other.hasPendingWrites && this.fromCache === other.fromCache;
+  }
+}
+
+/** ローカルエミュレータ用のデフォルトメタデータ */
+const DEFAULT_METADATA = new SnapshotMetadata(false, false);
+
 /** ドキュメントスナップショット */
 export class DocumentSnapshot<T = DocumentData> {
   constructor(
@@ -53,6 +83,9 @@ export class DocumentSnapshot<T = DocumentData> {
     private readonly _updateTime: string | null,
   ) {}
 
+  /** スナップショットのメタデータ */
+  readonly metadata: SnapshotMetadata = DEFAULT_METADATA;
+
   get id(): string {
     return this.ref.id;
   }
@@ -61,8 +94,15 @@ export class DocumentSnapshot<T = DocumentData> {
     return this._data !== null;
   }
 
-  data(): T | undefined {
+  data(_options?: SnapshotOptions): T | undefined {
     return this._data ?? undefined;
+  }
+
+  /** フィールドパスで指定したフィールドの値を取得する */
+  get(fieldPath: string | FieldPath): unknown {
+    if (!this._data) return undefined;
+    const fp = typeof fieldPath === "string" ? new FieldPath(...fieldPath.split(".")) : fieldPath;
+    return fp.resolveValue(this._data as Record<string, unknown>);
   }
 
   get createTime(): Timestamp | undefined {
@@ -115,6 +155,14 @@ export class Timestamp {
 
   isEqual(other: Timestamp): boolean {
     return this.seconds === other.seconds && this.nanoseconds === other.nanoseconds;
+  }
+
+  toJSON(): { seconds: number; nanoseconds: number } {
+    return { seconds: this.seconds, nanoseconds: this.nanoseconds };
+  }
+
+  toString(): string {
+    return `Timestamp(seconds=${this.seconds}, nanoseconds=${this.nanoseconds})`;
   }
 
   valueOf(): string {

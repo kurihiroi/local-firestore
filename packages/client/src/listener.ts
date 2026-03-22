@@ -47,6 +47,8 @@ interface QueryCallback<T = DocumentData> {
   onNext: (snapshot: QuerySnapshot<T>) => void;
   onError?: (error: FirestoreError) => void;
   converter: FirestoreDataConverter<T> | null;
+  firestore: Firestore;
+  queryOrRef: Query<T> | CollectionReference<T>;
 }
 
 type SubscriptionCallback = DocCallback<unknown> | QueryCallback<unknown>;
@@ -102,6 +104,7 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
             data,
             msg.createTime ?? "",
             msg.updateTime ?? "",
+            docCb.ref._firestore,
           );
           data = docCb.converter.fromFirestore(rawSnapshot) as DocumentData;
         }
@@ -113,6 +116,7 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
         if (cb.kind !== "query") break;
         const queryCb = cb as QueryCallback<unknown>;
         const conv = queryCb.converter;
+        const fs = queryCb.firestore;
 
         // クエリ結果をキャッシュ
         cache.putQuery(
@@ -136,6 +140,7 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
               d.data,
               d.createTime,
               d.updateTime,
+              fs,
             );
             const converted = conv.fromFirestore(rawSnapshot);
             return new QueryDocumentSnapshot(
@@ -144,9 +149,10 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
               converted as DocumentData,
               d.createTime,
               d.updateTime,
+              fs,
             );
           }
-          return new QueryDocumentSnapshot(d.path, docId, d.data, d.createTime, d.updateTime);
+          return new QueryDocumentSnapshot(d.path, docId, d.data, d.createTime, d.updateTime, fs);
         });
         const changes: DocumentChange<DocumentData>[] = msg.changes.map(
           (ch: DocumentChangeData) => {
@@ -160,6 +166,7 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
                 rawData,
                 ch.createTime ?? "",
                 ch.updateTime ?? "",
+                fs,
               );
               docData = conv.fromFirestore(rawSnapshot) as DocumentData;
             }
@@ -171,13 +178,14 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
                 docData,
                 ch.createTime ?? "",
                 ch.updateTime ?? "",
+                fs,
               ),
               oldIndex: ch.oldIndex,
               newIndex: ch.newIndex,
             };
           },
         );
-        const snapshot = new QuerySnapshot(docs, changes);
+        const snapshot = new QuerySnapshot(docs, changes, queryCb.queryOrRef);
         queryCb.onNext(snapshot);
         break;
       }
@@ -253,6 +261,8 @@ export function onSnapshotQuery<T = DocumentData>(
     onNext: onNext as (snapshot: QuerySnapshot<unknown>) => void,
     onError,
     converter: (queryOrRef._converter ?? null) as FirestoreDataConverter<unknown> | null,
+    firestore,
+    queryOrRef: queryOrRef as Query<unknown> | CollectionReference<unknown>,
   });
 
   let collectionPath: string;
@@ -285,6 +295,13 @@ export function onSnapshotQuery<T = DocumentData>(
   };
 }
 
+/** Observer オブジェクト形式 */
+export interface SnapshotObserver<S> {
+  next?: (snapshot: S) => void;
+  error?: (error: FirestoreError) => void;
+  complete?: () => void;
+}
+
 /**
  * onSnapshot - Firebase互換のオーバーロード
  *
@@ -296,26 +313,56 @@ export function onSnapshot<T = DocumentData>(
   onError?: (error: FirestoreError) => void,
 ): Unsubscribe;
 export function onSnapshot<T = DocumentData>(
+  ref: DocumentReference<T>,
+  observer: SnapshotObserver<DocumentSnapshot<T>>,
+): Unsubscribe;
+export function onSnapshot<T = DocumentData>(
   query: Query<T> | CollectionReference<T>,
   onNext: (snapshot: QuerySnapshot<T>) => void,
   onError?: (error: FirestoreError) => void,
 ): Unsubscribe;
 export function onSnapshot<T = DocumentData>(
+  query: Query<T> | CollectionReference<T>,
+  observer: SnapshotObserver<QuerySnapshot<T>>,
+): Unsubscribe;
+export function onSnapshot<T = DocumentData>(
   target: DocumentReference<T> | Query<T> | CollectionReference<T>,
-  onNext: ((snapshot: DocumentSnapshot<T>) => void) | ((snapshot: QuerySnapshot<T>) => void),
+  onNextOrObserver:
+    | ((snapshot: DocumentSnapshot<T>) => void)
+    | ((snapshot: QuerySnapshot<T>) => void)
+    | SnapshotObserver<DocumentSnapshot<T>>
+    | SnapshotObserver<QuerySnapshot<T>>,
   onError?: (error: FirestoreError) => void,
 ): Unsubscribe {
+  // Observer オブジェクト形式の処理
+  let resolvedOnNext:
+    | ((snapshot: DocumentSnapshot<T>) => void)
+    | ((snapshot: QuerySnapshot<T>) => void);
+  let resolvedOnError: ((error: FirestoreError) => void) | undefined;
+
+  if (typeof onNextOrObserver === "function") {
+    resolvedOnNext = onNextOrObserver;
+    resolvedOnError = onError;
+  } else {
+    const observer = onNextOrObserver as SnapshotObserver<DocumentSnapshot<T>> &
+      SnapshotObserver<QuerySnapshot<T>>;
+    resolvedOnNext = observer.next
+      ? (observer.next as (snapshot: DocumentSnapshot<T>) => void)
+      : () => {};
+    resolvedOnError = observer.error;
+  }
+
   if (target.type === "document") {
     return onSnapshotDoc(
       target as DocumentReference<T>,
-      onNext as (snapshot: DocumentSnapshot<T>) => void,
-      onError,
+      resolvedOnNext as (snapshot: DocumentSnapshot<T>) => void,
+      resolvedOnError,
     );
   }
   return onSnapshotQuery(
     target as Query<T> | CollectionReference<T>,
-    onNext as (snapshot: QuerySnapshot<T>) => void,
-    onError,
+    resolvedOnNext as (snapshot: QuerySnapshot<T>) => void,
+    resolvedOnError,
   );
 }
 

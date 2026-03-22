@@ -199,6 +199,29 @@ function buildWhereClause(w: SerializedWhereConstraint): {
   sql: string;
   sqlParams: unknown[];
 } {
+  // __name__ はドキュメントIDを指す特殊フィールド
+  if (w.fieldPath === "__name__") {
+    const idExpr = "document_id";
+    switch (w.op) {
+      case "==":
+        return { sql: `${idExpr} = ?`, sqlParams: [w.value] };
+      case "!=":
+        return { sql: `${idExpr} != ?`, sqlParams: [w.value] };
+      case "in": {
+        const values = w.value as unknown[];
+        const placeholders = values.map(() => "?").join(", ");
+        return { sql: `${idExpr} IN (${placeholders})`, sqlParams: values };
+      }
+      case "not-in": {
+        const values = w.value as unknown[];
+        const placeholders = values.map(() => "?").join(", ");
+        return { sql: `${idExpr} NOT IN (${placeholders})`, sqlParams: values };
+      }
+      default:
+        throw new Error(`Unsupported operator for documentId(): ${w.op}`);
+    }
+  }
+
   const fieldExpr = `json_extract(data, '$.${escapePath(w.fieldPath)}')`;
 
   switch (w.op) {

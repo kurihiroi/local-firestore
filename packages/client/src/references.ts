@@ -82,6 +82,12 @@ export function createDocumentReference<T>(
     id: docId,
     path,
     parent,
+    get firestore() {
+      return firestore;
+    },
+    get converter() {
+      return converter;
+    },
     _firestore: firestore,
     _converter: converter,
     withConverter<U>(c: FirestoreDataConverter<U> | null) {
@@ -118,6 +124,12 @@ export function createCollectionReference<T>(
     id: collId,
     path,
     parent: parentDoc ?? null,
+    get firestore() {
+      return firestore;
+    },
+    get converter() {
+      return converter;
+    },
     _firestore: firestore,
     _converter: converter,
     withConverter<U>(c: FirestoreDataConverter<U> | null) {

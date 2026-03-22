@@ -23,6 +23,14 @@ export {
 } from "./security/rules-engine.js";
 export { securityRulesMiddleware } from "./security/rules-middleware.js";
 export { DocumentNotFoundError, DocumentService } from "./services/document.js";
+export type {
+  CompositeIndex,
+  IndexConfiguration,
+  IndexField,
+  IndexValidationMode,
+  IndexValidationResult,
+} from "./services/index-manager.js";
+export { IndexManager } from "./services/index-manager.js";
 export { ListenerManager } from "./services/listener-manager.js";
 export { QueryService } from "./services/query.js";
 export {
@@ -31,6 +39,10 @@ export {
   TransactionNotFoundError,
   TransactionService,
 } from "./services/transaction.js";
+export type { TriggerEvent, TriggerEventType, TriggerHandler } from "./services/trigger.js";
+export { TriggerService } from "./services/trigger.js";
+export type { TtlCleanupResult, TtlPolicy } from "./services/ttl.js";
+export { TtlService } from "./services/ttl.js";
 export { DocumentRepository } from "./storage/repository.js";
 export { createDatabase } from "./storage/sqlite.js";
 export type { TlsOptions } from "./tls.js";
