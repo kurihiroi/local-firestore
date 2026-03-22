@@ -104,3 +104,166 @@
 - `array-contains` / `array-contains-any` と他フィールドのフィルタの組み合わせ
 
 local-firestore では SQLite がこれらを暗黙的に処理するため、インデックス未定義でもクエリが成功する。本番環境への移行時には、使用しているクエリパターンに対応する複合インデックスの定義が必要となる点に注意が必要。
+
+---
+
+## クライアント SDK (TypeScript) の API 互換性
+
+本家 Firebase Web SDK v9+ (`firebase/firestore`) との API レベルの差分を整理する。
+
+### 関数の互換性
+
+#### 実装済み (本家と同等のシグネチャ)
+
+| 関数 | 備考 |
+|------|------|
+| `getFirestore()` | 引数が `FirestoreSettings` (本家は `FirebaseApp`) |
+| `initializeFirestore()` | 第1引数 `_app` を受け取るが無視する |
+| `doc()` | `Firestore \| CollectionReference` を受け取る |
+| `collection()` | `Firestore \| DocumentReference` を受け取る |
+| `getDoc()` | |
+| `getDocs()` | |
+| `setDoc()` | `merge` / `mergeFields` オーバーロードあり |
+| `addDoc()` | |
+| `updateDoc()` | |
+| `deleteDoc()` | |
+| `query()` | |
+| `where()` | |
+| `orderBy()` | |
+| `limit()` / `limitToLast()` | |
+| `startAt()` / `startAfter()` / `endAt()` / `endBefore()` | |
+| `and()` / `or()` | |
+| `collectionGroup()` | |
+| `onSnapshot()` | ドキュメント / クエリ両対応 |
+| `onSnapshotsInSync()` | |
+| `writeBatch()` | |
+| `runTransaction()` | `TransactionOptions` 対応 |
+| `serverTimestamp()` / `deleteField()` / `increment()` | |
+| `arrayUnion()` / `arrayRemove()` | |
+| `count()` / `sum()` / `average()` | |
+| `getCountFromServer()` / `getAggregateFromServer()` | |
+
+#### 未実装の関数
+
+| 関数 | 本家の用途 |
+|------|-----------|
+| `connectFirestoreEmulator()` | エミュレータ接続設定 |
+| `terminate()` | Firestore インスタンスの終了 |
+| `clearIndexedDbPersistence()` | IndexedDB キャッシュのクリア |
+| `enableIndexedDbPersistence()` | IndexedDB オフライン永続化の有効化 |
+| `enableMultiTabIndexedDbPersistence()` | マルチタブ対応のオフライン永続化 |
+| `enableNetwork()` / `disableNetwork()` | ネットワーク接続の有効化/無効化 |
+| `waitForPendingWrites()` | 保留中の書き込み完了を待機 |
+| `loadBundle()` | データバンドルの読み込み |
+| `namedQuery()` | バンドル内の名前付きクエリの取得 |
+| `documentId()` | `where` フィルタでドキュメントIDを指定する特殊フィールド |
+| `getDocFromCache()` | キャッシュからのドキュメント取得 |
+| `getDocFromServer()` | サーバーからの強制取得 |
+| `getDocsFromCache()` | キャッシュからのクエリ結果取得 |
+| `getDocsFromServer()` | サーバーからの強制クエリ実行 |
+| `setLogLevel()` | ログレベル設定 |
+| `refEqual()` | リファレンスの等値比較 |
+| `queryEqual()` | クエリの等値比較 |
+| `snapshotEqual()` | スナップショットの等値比較 |
+
+### クラス / インターフェースの差異
+
+#### `DocumentSnapshot`
+
+| メンバー | 本家 | local-firestore |
+|---------|------|-----------------|
+| `id` | プロパティ | getter (互換) |
+| `ref` | プロパティ | プロパティ (互換) |
+| `exists()` | メソッド | メソッド (互換) |
+| `data()` | `data(options?: SnapshotOptions)` | `data()` — `SnapshotOptions` 未対応 |
+| `get(fieldPath)` | フィールド値を取得 | **未実装** |
+| `metadata` | `SnapshotMetadata` (hasPendingWrites, fromCache) | **未実装** |
+
+#### `QueryDocumentSnapshot`
+
+| メンバー | 本家 | local-firestore |
+|---------|------|-----------------|
+| `ref` | `DocumentReference` | **未実装** — `path` と `id` のみ |
+| `data()` | `data(options?: SnapshotOptions)` | `data()` — `SnapshotOptions` 未対応 |
+| `get(fieldPath)` | フィールド値を取得 | **未実装** |
+
+#### `QuerySnapshot`
+
+| メンバー | 本家 | local-firestore |
+|---------|------|-----------------|
+| `metadata` | `SnapshotMetadata` | **未実装** |
+| `query` | 元のクエリを返す | **未実装** |
+| `docChanges()` | `docChanges(options?)` | `docChanges()` — `SnapshotListenOptions` 未対応 |
+
+#### `DocumentReference`
+
+| メンバー | 本家 | local-firestore |
+|---------|------|-----------------|
+| `firestore` | `Firestore` | `_firestore` (internal プレフィックス) |
+| `converter` | `FirestoreDataConverter \| null` | `_converter` (internal プレフィックス) |
+
+#### `CollectionReference`
+
+| メンバー | 本家 | local-firestore |
+|---------|------|-----------------|
+| `firestore` | `Firestore` | `_firestore` (internal プレフィックス) |
+| `converter` | `FirestoreDataConverter \| null` | `_converter` (internal プレフィックス) |
+
+#### `Timestamp`
+
+| メンバー | 本家 | local-firestore |
+|---------|------|-----------------|
+| `toJSON()` | `{seconds, nanoseconds}` を返す | **未実装** |
+| `toString()` | 文字列表現 | **未実装** (`valueOf()` はあり) |
+
+#### `onSnapshot` のオプション
+
+| オプション | 本家 | local-firestore |
+|-----------|------|-----------------|
+| `includeMetadataChanges` | メタデータ変更も通知 | **未対応** |
+| `SnapshotListenOptions` | リスナーオプション | **未対応** |
+| Observer オブジェクト形式 | `{ next, error, complete }` | **未対応** — 個別引数のみ |
+
+#### `updateDoc` の引数形式
+
+| 形式 | 本家 | local-firestore |
+|------|------|-----------------|
+| `updateDoc(ref, data)` | 対応 | 対応 |
+| `updateDoc(ref, field, value, ...)` | フィールドパス + 値のペアで更新 | **未対応** |
+
+### 型の互換性
+
+| 型 | 本家 | local-firestore |
+|----|------|-----------------|
+| `DocumentData` | 互換 | 互換 |
+| `WithFieldValue<T>` | 互換 | 互換 |
+| `PartialWithFieldValue<T>` | 互換 | 互換 |
+| `SetOptions` | 互換 | 互換 |
+| `FirestoreDataConverter<T>` | 互換 | 互換 |
+| `WhereFilterOp` | 互換 | 互換 |
+| `OrderByDirection` | 互換 | 互換 |
+| `FirestoreErrorCode` | 互換 | 互換 |
+| `SnapshotOptions` | スナップショットのデータ取得オプション | **未実装** |
+| `SnapshotMetadata` | hasPendingWrites, fromCache | **未実装** |
+| `SnapshotListenOptions` | includeMetadataChanges | **未実装** |
+| `Unsubscribe` | 互換 | 互換 |
+| `UpdateData<T>` | ネストフィールドのドット記法対応 | **未実装** (Partial<T> で代替) |
+| `FirestoreError` | extends Error, code プロパティ | 互換 |
+
+### 独自拡張 (本家にない機能)
+
+| 機能 | 説明 |
+|------|------|
+| `ConnectionManager` | WebSocket 接続管理 (自動再接続、状態監視) |
+| `SnapshotCache` | クライアントサイドのスナップショットキャッシュ |
+| `WriteQueue` | オフライン書き込みキュー (エンキュー、フラッシュ、リトライ) |
+| `getConnectionManager()` | 接続マネージャーの取得 |
+
+### 移行時の注意点
+
+1. **`DocumentSnapshot.get(fieldPath)`** — 本家ではフィールドパスによる値取得が可能だが、local-firestore では `data()` でオブジェクト全体を取得して自分でアクセスする必要がある
+2. **`updateDoc` のフィールドパス形式** — `updateDoc(ref, "field.nested", value)` の形式が使えない。オブジェクト形式で渡す必要がある
+3. **`SnapshotMetadata`** — `hasPendingWrites` や `fromCache` が利用できないため、これらに依存するロジックは移行時に調整が必要
+4. **`DocumentReference.firestore` / `converter`** — internal プレフィックス (`_firestore`, `_converter`) が付いているため、直接アクセスしているコードは修正が必要
+5. **`documentId()`** — `where` フィルタでドキュメントIDを条件にする場合、本家では `documentId()` を使うが local-firestore では未対応
+6. **Observer オブジェクト形式** — `onSnapshot(ref, { next: ..., error: ... })` 形式が使えない。`onSnapshot(ref, onNext, onError)` 形式を使用する必要がある
