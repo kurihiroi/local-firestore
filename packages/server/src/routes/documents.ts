@@ -2,6 +2,7 @@ import type {
   AddDocumentRequest,
   AddDocumentResponse,
   DeleteDocumentResponse,
+  DocumentMetadata,
   ErrorResponse,
   GetDocumentResponse,
   SetDocumentRequest,
@@ -14,7 +15,7 @@ import { isCollectionPath, isDocumentPath } from "../utils/path.js";
 
 export function createDocumentRoutes(
   documentService: DocumentService,
-  onDocumentChange?: (path: string) => void,
+  onDocumentChange?: (path: string, oldDocument?: DocumentMetadata) => void,
 ): Hono {
   const app = new Hono();
 
@@ -50,7 +51,7 @@ export function createDocumentRoutes(
     }
 
     const meta = documentService.addDocument(body.collectionPath, body.data);
-    onDocumentChange?.(meta.path);
+    onDocumentChange?.(meta.path, undefined);
     const response: AddDocumentResponse = {
       path: meta.path,
       documentId: meta.documentId,
@@ -68,9 +69,10 @@ export function createDocumentRoutes(
       );
     }
 
+    const oldDoc = documentService.getDocument(path);
     const body = await c.req.json<SetDocumentRequest>();
     documentService.setDocument(path, body.data, body.options);
-    onDocumentChange?.(path);
+    onDocumentChange?.(path, oldDoc);
     return c.json({ success: true });
   });
 
@@ -85,9 +87,10 @@ export function createDocumentRoutes(
     }
 
     try {
+      const oldDoc = documentService.getDocument(path);
       const body = await c.req.json<UpdateDocumentRequest>();
       documentService.updateDocument(path, body.data);
-      onDocumentChange?.(path);
+      onDocumentChange?.(path, oldDoc);
       return c.json({ success: true });
     } catch (e) {
       if (e instanceof DocumentNotFoundError) {
@@ -107,8 +110,9 @@ export function createDocumentRoutes(
       );
     }
 
+    const oldDoc = documentService.getDocument(path);
     documentService.deleteDocument(path);
-    onDocumentChange?.(path);
+    onDocumentChange?.(path, oldDoc);
     const response: DeleteDocumentResponse = { success: true };
     return c.json(response);
   });

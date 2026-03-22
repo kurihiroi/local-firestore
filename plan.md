@@ -1,272 +1,197 @@
-# Firestore Security Rules 100%カバレッジ実装計画
+# 未実装機能の実装計画
 
-## 現状の問題
+docs/2026-03-22-firestore-feature-differences.md の未実装項目を優先度・依存関係に基づいて整理した実装計画。
 
-現在の `rules-engine.ts` は正規表現ベースのパターンマッチで式を評価しており、
-ハードコードされた数パターンしか対応できない。Firestore ルール言語の全機能をサポートするには、
-**適切なレキサー・パーサー・評価器（AST ベース）** への作り直しが必要。
+---
 
-## アーキテクチャ
+## Phase 1: クライアント SDK の API 互換性向上（影響度: 高、難易度: 低〜中）
 
-```
-security/
-├── rules-engine.ts          # エントリポイント（SecurityRulesEngine クラス）※改修
-├── rules-middleware.ts       # HTTP ミドルウェア ※小改修（request.resource/request.time 対応）
-├── rules-parser/
-│   ├── lexer.ts              # トークナイザー
-│   ├── parser.ts             # AST パーサー
-│   └── ast.ts                # AST ノード型定義
-├── rules-evaluator/
-│   ├── evaluator.ts          # AST 評価器（メイン）
-│   ├── types.ts              # ランタイム値型（RulesValue）
-│   ├── context.ts            # 評価コンテキスト（request, resource, math 等）
-│   ├── operators.ts          # 演算子の実装
-│   ├── builtin-functions.ts  # get(), exists(), getAfter(), debug()
-│   ├── string-methods.ts     # String メソッド群
-│   ├── list-methods.ts       # List メソッド群
-│   ├── map-methods.ts        # Map / MapDiff メソッド群
-│   ├── set-methods.ts        # Set メソッド群
-│   ├── timestamp-methods.ts  # Timestamp メソッド群・namespace関数
-│   ├── duration-methods.ts   # Duration メソッド群・namespace関数
-│   ├── latlng-methods.ts     # LatLng メソッド群・namespace関数
-│   ├── bytes-methods.ts      # Bytes メソッド群
-│   ├── math-functions.ts     # math namespace 関数
-│   └── hashing-functions.ts  # hashing namespace 関数
-└── __tests__/
-    ├── lexer.test.ts
-    ├── parser.test.ts
-    ├── evaluator.test.ts
-    ├── operators.test.ts
-    ├── string-methods.test.ts
-    ├── list-methods.test.ts
-    ├── map-methods.test.ts
-    ├── set-methods.test.ts
-    ├── timestamp-methods.test.ts
-    ├── duration-methods.test.ts
-    ├── latlng-methods.test.ts
-    ├── bytes-methods.test.ts
-    ├── math-functions.test.ts
-    ├── hashing-functions.test.ts
-    └── builtin-functions.test.ts
-```
+本家 Firebase SDK との互換性を高め、移行時の摩擦を減らす項目。既存コードの拡張で完結し、破壊的変更が少ない。
 
-## 実装ステップ
+### 1-1. `DocumentSnapshot.get(fieldPath)` の実装
+- **対象ファイル**: `packages/client/src/types.ts`
+- **内容**: `get(fieldPath: string | FieldPath)` メソッドを `DocumentSnapshot` に追加。ドット記法のネストフィールドアクセスに対応
+- **テスト**: `packages/client/src/types.test.ts` に追加
 
-### Step 1: AST ノード型定義 (`ast.ts`)
+### 1-2. `QueryDocumentSnapshot` に `ref` プロパティを追加
+- **対象ファイル**: `packages/client/src/snapshots.ts`
+- **内容**: 現在 `path` と `id` のみ。`DocumentReference` を返す `ref` プロパティを追加
+- **依存**: `createDocumentReference` (references.ts) を使って生成。Firestore インスタンスへの参照が必要なため、コンストラクタ引数の拡張が必要
+- **テスト**: `packages/client/src/snapshots.test.ts` (新規作成 or 既存テストに追加)
 
-全ての式構造を表現する AST ノード型を定義する。
+### 1-3. `QueryDocumentSnapshot.get(fieldPath)` の実装
+- **対象ファイル**: `packages/client/src/snapshots.ts`
+- **内容**: 1-1 と同様のロジック
+- **テスト**: 1-2 と同じファイル
 
-- リテラル: `BoolLiteral`, `IntLiteral`, `FloatLiteral`, `StringLiteral`, `NullLiteral`
-- 識別子: `Identifier` (変数参照)
-- メンバーアクセス: `MemberExpression` (`a.b`, `a.b.c`)
-- インデックスアクセス: `IndexExpression` (`list[0]`, `map["key"]`)
-- 関数呼び出し: `CallExpression` (`size()`, `get(path)`)
-- メソッド呼び出し: `MethodCallExpression` (`str.matches(regex)`)
-- 二項演算: `BinaryExpression` (`+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `in`)
-- 単項演算: `UnaryExpression` (`!`, `-`)
-- 三項演算: `ConditionalExpression` (`a ? b : c`)
-- 型チェック: `IsExpression` (`value is string`)
-- リストリテラル: `ListExpression` (`[1, 2, 3]`)
-- マップリテラル: `MapExpression` (`{"key": value}`)
-- let 束縛: `LetBinding` (`let x = expr;`)
-- return 文: `ReturnStatement`
-- 関数定義: `FunctionDeclaration`
+### 1-4. `QuerySnapshot.query` プロパティの実装
+- **対象ファイル**: `packages/client/src/snapshots.ts`
+- **内容**: `QuerySnapshot` に元のクエリへの参照を保持する `query` プロパティを追加。コンストラクタ引数にクエリを追加
+- **影響範囲**: `getDocs()` (crud.ts)、`onSnapshot()` (listener.ts) で QuerySnapshot 生成箇所を修正
+- **テスト**: 既存テストの更新 + 新規テスト
 
-### Step 2: レキサー (`lexer.ts`)
+### 1-5. `Timestamp.toJSON()` / `Timestamp.toString()` の実装
+- **対象ファイル**: `packages/client/src/types.ts`
+- **内容**:
+  - `toJSON()`: `{ seconds, nanoseconds }` を返す
+  - `toString()`: 人間可読な文字列表現を返す
+- **テスト**: `packages/client/src/types.test.ts`
 
-ルール式文字列をトークン列に変換する。
+### 1-6. `updateDoc` のフィールドパス形式対応
+- **対象ファイル**: `packages/client/src/crud.ts`
+- **内容**: `updateDoc(ref, field, value, ...moreFieldsAndValues)` のオーバーロードを追加。フィールドパス（ドット記法文字列 or FieldPath）と値のペアをオブジェクトに変換
+- **テスト**: `packages/e2e/src/crud.test.ts` or `crud-extended.test.ts`
 
-**トークン種別:**
-- 数値リテラル (int/float)
-- 文字列リテラル (`'...'`, `"..."`)
-- 識別子・キーワード (`true`, `false`, `null`, `let`, `return`, `function`, `is`, `in`)
-- 演算子 (`+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`)
-- 区切り子 (`.`, `,`, `(`, `)`, `[`, `]`, `{`, `}`, `:`, `;`, `?`)
+### 1-7. `onSnapshot` の Observer オブジェクト形式対応
+- **対象ファイル**: `packages/client/src/listener.ts`
+- **内容**: `onSnapshot(ref, { next, error, complete })` 形式のオーバーロードを追加
+- **テスト**: `packages/e2e/src/listeners.test.ts`
 
-### Step 3: パーサー (`parser.ts`)
+### 1-8. `documentId()` 関数の実装
+- **対象ファイル**: `packages/client/src/query.ts` + `packages/server/src/services/query.ts`
+- **内容**: `where(documentId(), '==', 'docId')` のような使い方を可能にする特殊フィールドセンチネルを実装。サーバー側でもドキュメント ID でのフィルタリングに対応
+- **テスト**: `packages/e2e/src/query.test.ts`
 
-トークン列を AST に変換する再帰下降パーサー。
+---
 
-**演算子の優先順位（低→高）:**
-1. `? :` (三項)
-2. `||` (論理OR)
-3. `&&` (論理AND)
-4. `==`, `!=` (等値)
-5. `<`, `<=`, `>`, `>=`, `in`, `is` (比較・型チェック)
-6. `+`, `-` (加減算)
-7. `*`, `/`, `%` (乗除算)
-8. `!`, `-` (単項)
-9. `.`, `()`, `[]` (メンバー・呼び出し・添字)
+## Phase 2: メタデータ・型の互換性（影響度: 中、難易度: 中）
 
-### Step 4: ランタイム値型 (`types.ts`)
+### 2-1. `SnapshotMetadata` の実装
+- **対象ファイル**: `packages/client/src/types.ts` (新しいクラス)
+- **内容**: `hasPendingWrites: boolean`, `fromCache: boolean`, `isEqual()` を持つクラス。ローカルエミュレータなので `hasPendingWrites: false`, `fromCache: false` を基本とする
+- **影響範囲**: `DocumentSnapshot.metadata`, `QuerySnapshot.metadata` に追加
 
-評価器が扱うランタイム値の型体系を定義する。
+### 2-2. `SnapshotOptions` 型の実装
+- **対象ファイル**: `packages/client/src/types.ts`
+- **内容**: `{ serverTimestamps?: 'estimate' | 'previous' | 'none' }` 型を定義。`data(options?)` の引数として受け取るが、ローカルではサーバータイムスタンプは常に解決済みなので実質 no-op
+- **テスト**: 型互換性の確認
 
-```typescript
-type RulesValue =
-  | RulesBool
-  | RulesInt
-  | RulesFloat
-  | RulesString
-  | RulesBytes
-  | RulesNull
-  | RulesList
-  | RulesMap
-  | RulesSet
-  | RulesTimestamp
-  | RulesDuration
-  | RulesLatLng
-  | RulesPath
-  | RulesMapDiff
-```
+### 2-3. 等値比較関数群の実装
+- **対象ファイル**: `packages/client/src/index.ts` + 各ファイル
+- **内容**: `refEqual()`, `queryEqual()`, `snapshotEqual()` を実装
+- **テスト**: ユニットテスト
 
-各型に `typeName` フィールドを持たせ、`is` 演算子で型チェックできるようにする。
+### 2-4. `DocumentReference.firestore` / `converter` の公開プロパティ化
+- **対象ファイル**: `packages/client/src/types.ts`, `packages/client/src/references.ts`
+- **内容**: `_firestore` → `firestore` (getter)、`_converter` → `converter` (getter) を追加。後方互換のため `_firestore`, `_converter` も維持
+- **破壊的変更リスク**: 低（getter 追加のみ）
 
-### Step 5: 評価コンテキスト (`context.ts`)
+### 2-5. クエリ制約の型定義
+- **対象ファイル**: `packages/client/src/query.ts`
+- **内容**: `QueryConstraintType`, `QueryFilterConstraint`, `QueryNonFilterConstraint` の型/ユニオン型を定義し export
+- **テスト**: 型レベルのテスト
 
-`request`, `resource`, `math`, `timestamp`, `duration`, `latlng`, `hashing` などの
-グローバルオブジェクト・名前空間をコンテキストとして構築する。
+---
 
-- `request.auth` → AuthContext（uid + token claims）
-- `request.resource.data` → 書き込みデータ
-- `request.time` → リクエスト時刻（Timestamp型）
-- `request.path` → リクエストパス（Path型）
-- `request.method` → 操作種別
-- `request.query` → クエリパラメータ
-- `resource.data` → 既存ドキュメントデータ
-- `resource.id` → ドキュメントID
-- `resource.__name__` → フルパス
+## Phase 3: ユーティリティ関数（影響度: 低〜中、難易度: 低）
 
-### Step 6: 演算子の実装 (`operators.ts`)
+### 3-1. `terminate()` の実装
+- **対象ファイル**: `packages/client/src/firestore.ts`
+- **内容**: WebSocket 接続のクローズ、pending な操作の中断。ConnectionManager の `disconnect()` を呼ぶ
+- **テスト**: ユニットテスト
 
-- 算術: `+`（数値加算・文字列結合・リスト結合）, `-`, `*`, `/`, `%`
-- 比較: `==`, `!=`, `<`, `<=`, `>`, `>=`（型を考慮した比較）
-- 論理: `&&`（短絡）, `||`（短絡）, `!`
-- メンバーシップ: `in`（リスト・マップ・セット）
-- 型チェック: `is`
-- 三項: `? :`
+### 3-2. `enableNetwork()` / `disableNetwork()` の実装
+- **対象ファイル**: `packages/client/src/firestore.ts`
+- **内容**: ネットワーク無効化時は WriteQueue にエンキューし、有効化時にフラッシュする。ConnectionManager との連携
+- **テスト**: ユニットテスト + E2E
 
-### Step 7: 評価器メイン (`evaluator.ts`)
+### 3-3. `waitForPendingWrites()` の実装
+- **対象ファイル**: `packages/client/src/firestore.ts`
+- **内容**: WriteQueue の pending 書き込みがすべて完了するまで待機する Promise を返す
+- **テスト**: ユニットテスト
 
-AST ノードを再帰的にウォークして値を返す。
+### 3-4. `setLogLevel()` の実装
+- **対象ファイル**: `packages/client/src/firestore.ts`
+- **内容**: クライアント側のログレベル制御。`'debug' | 'error' | 'silent'` 程度
+- **テスト**: ユニットテスト
 
-- リテラル → 対応する RulesValue
-- 識別子 → コンテキストから解決
-- メンバーアクセス → オブジェクトのプロパティ解決
-- 関数呼び出し → 組み込み関数 or カスタム関数を呼び出し
-- メソッド呼び出し → 型に応じたメソッドディスパッチ
-- 二項/単項/三項演算 → operators.ts に委譲
-- let 束縛 → スコープに変数追加
-- カスタム関数 → 関数テーブルに登録・呼び出し
+---
 
-### Step 8: 組み込み関数 (`builtin-functions.ts`)
+## Phase 4: Tree Shaking 対応（影響度: 中、難易度: 低）
 
-- `get(path)` → DocumentService を通じてドキュメント取得（RulesMap を返す）
-- `exists(path)` → ドキュメント存在チェック（bool）
-- `getAfter(path)` → トランザクション内の書き込み後状態取得
-- `debug(value)` → コンソール出力して値をそのまま返す
+### 4-1. `sideEffects: false` の追加
+- **対象ファイル**: 各パッケージの `package.json`（shared, client, server）
+- **内容**: `"sideEffects": false` を追加
 
-`get()`/`exists()` はルール評価中にDBアクセスが必要なため、
-`SecurityRulesEngine` に `DocumentService` への参照を持たせる。
+### 4-2. tsup splitting の有効化（検討）
+- **対象ファイル**: 各パッケージの `tsup.config.ts`
+- **内容**: `splitting: true` への変更を検討。ESM ビルドではチャンク分割が有効になる
+- **注意**: CJS ビルドでは splitting は使用不可。動作確認が必要
 
-### Step 9: 型別メソッド群
+---
 
-各ファイルで型固有のメソッドを実装する。
+## Phase 5: アプリケーション機能（影響度: 高、難易度: 高）
 
-**string-methods.ts:**
-`size()`, `matches()`, `split()`, `trim()`, `lower()`, `upper()`,
-`replace()`, `contains()`, `startsWith()`, `endsWith()`, `toUtf8()`
+### 5-1. Cloud Functions トリガーのエミュレーション
+- **対象ファイル**: `packages/server/src/services/` (新ファイル), `packages/server/src/routes/` (新ファイル)
+- **設計**:
+  - `TriggerService` クラスを新設。`onCreate`, `onUpdate`, `onDelete`, `onWrite` のトリガーを登録可能
+  - ドキュメント変更時に DocumentService から TriggerService に通知し、登録済みハンドラを実行
+  - トリガーの登録は HTTP API (`POST /triggers`) で行う。ユーザーは別プロセスで Cloud Functions のコードを起動し、コールバック URL を登録する形式
+  - 代替案: サーバーに直接関数を登録できる Node.js API を提供
+- **テスト**: ユニットテスト + E2E
+- **検討事項**: Cloud Functions emulator との連携方式を決める必要あり
 
-**list-methods.ts:**
-`size()`, `hasAny()`, `hasAll()`, `hasOnly()`, `toSet()`, `join()`, `concat()`
+### 5-2. 複合インデックス定義のバリデーション
+- **対象ファイル**: `packages/server/src/services/` (新ファイル)
+- **設計**:
+  - `IndexManager` クラスを新設。`firestore.indexes.json` をパースしてインデックス定義を管理
+  - クエリ実行時に必要なインデックスが定義されているか検証し、未定義の場合は警告またはエラーを返す
+  - 実際のクエリ実行は従来通り SQLite に委譲（インデックスのバリデーションのみ）
+  - `strict` モード: 本家同様にエラーを返す / `warn` モード: 警告ログのみ
+- **テスト**: ユニットテスト
 
-**map-methods.ts:**
-`size()`, `keys()`, `values()`, `get()`, `diff()`
-+ MapDiff: `addedKeys()`, `removedKeys()`, `changedKeys()`, `unchangedKeys()`, `affectedKeys()`
+### 5-3. TTL (Time-to-Live) の実装
+- **対象ファイル**: `packages/server/src/services/` (新ファイル)
+- **設計**:
+  - `TtlService` クラスを新設。TTL ポリシー（対象コレクション + Timestamp フィールド）を定義
+  - 定期的（設定可能なインターバル）に期限切れドキュメントを検出し削除
+  - 削除時は DocumentService 経由で行い、リスナー通知やトリガーも発火させる
+- **テスト**: ユニットテスト + E2E
 
-**set-methods.ts:**
-`size()`, `hasAny()`, `hasAll()`, `hasOnly()`, `union()`, `intersection()`, `difference()`
+---
 
-**timestamp-methods.ts:**
-`date()`, `year()`, `month()`, `day()`, `hours()`, `minutes()`, `seconds()`,
-`nanos()`, `dayOfWeek()`, `dayOfYear()`, `toMillis()`
-+ namespace: `timestamp.date()`, `timestamp.value()`
+## Phase 6: 先進的機能（影響度: 中〜低、難易度: 高）
 
-**duration-methods.ts:**
-`seconds()`, `minutes()`, `hours()`, `nanos()`
-+ namespace: `duration.time()`, `duration.value()`
+### 6-1. マルチデータベースの実装
+- **設計**:
+  - サーバー起動時に複数のデータベースインスタンスを作成可能にする
+  - 各データベースが独立した SQLite ファイルを持つ
+  - ルーティングに database ID を含める (`/databases/:dbId/docs/:path`)
+  - クライアント SDK で `getFirestore(app, databaseId)` の形式をサポート
+- **影響範囲**: サーバー全体のアーキテクチャに影響。大規模な変更
 
-**latlng-methods.ts:**
-`latitude()`, `longitude()`, `distance()`
-+ namespace: `latlng.value()`
+### 6-2. ベクトル検索（VectorValue + FindNearest）
+- **設計**:
+  - `VectorValue` クラスをクライアント SDK に追加
+  - サーバー側で `FindNearest` クエリを SQLite で実装（コサイン類似度 / ユークリッド距離）
+  - SQLite の数値配列として保存し、距離計算は SQL のユーザー定義関数で実装
+- **影響範囲**: 型定義、シリアライズ、クエリエンジン
 
-**bytes-methods.ts:**
-`size()`, `toBase64()`, `toHexString()`
+---
 
-### Step 10: 名前空間関数
+## 実装順序のまとめ
 
-**math-functions.ts:**
-`math.abs()`, `math.ceil()`, `math.floor()`, `math.round()`,
-`math.sqrt()`, `math.pow()`, `math.isNaN()`, `math.isInfinite()`
+| 優先度 | Phase | 推定工数 | 理由 |
+|--------|-------|----------|------|
+| 1 | Phase 1 (SDK 互換性) | 中 | 移行時の摩擦が最も大きい部分。個々の変更は小さい |
+| 2 | Phase 4 (Tree Shaking) | 小 | 設定変更のみで効果が大きい |
+| 3 | Phase 2 (メタデータ・型) | 中 | API 互換性の仕上げ |
+| 4 | Phase 3 (ユーティリティ) | 小 | あると便利だが必須ではない |
+| 5 | Phase 5 (アプリ機能) | 大 | 設計判断が必要。個別に検討 |
+| 6 | Phase 6 (先進的機能) | 大 | ニーズに応じて |
 
-**hashing-functions.ts:**
-`hashing.md5()`, `hashing.sha256()`, `hashing.crc32()`, `hashing.crc32c()`
+---
 
-### Step 11: カスタム関数サポート
+## スコープ外（実装しない項目）
 
-- `function` キーワードで定義された関数をパースし `FunctionDeclaration` ノードに変換
-- 評価時に関数テーブルに登録
-- 呼び出し時に引数をバインドして `return` 文の式を評価
-- `let` 束縛のサポート（最大10個）
-- 再帰禁止、コールスタック深度制限（20）
+以下はクラウドインフラ依存または本家でも非推奨/プレビューのため、実装対象外とする:
 
-### Step 12: ルール定義形式の拡張
-
-現在の JSON ベースのルール定義を維持しつつ、式の部分で全機能が使えるようにする。
-ルール定義インターフェースは基本的に変更不要（`string` 式部分がフルパーサーで評価されるようになる）。
-
-追加で対応する項目:
-- `CollectionRule` に `functions` フィールドを追加（カスタム関数定義用）
-- ワイルドカード変数名の自由化（`{userId}` 等、`{collection}` 以外も対応）
-- 再帰ワイルドカード `{document=**}` のサポート
-- ワイルドカード変数を式内で参照可能にする
-
-### Step 13: SecurityRulesEngine の改修
-
-- コンストラクタに `DocumentService`（オプション）を受け取れるようにする
-- `evaluate()` 内で旧正規表現ベースの `evaluateExpression()` を新 AST ベース評価器に置き換え
-- `RuleContext` を拡張して `request.time`, `request.query` 等を追加
-- ワイルドカード変数のバインディングを実装
-
-### Step 14: rules-middleware の改修
-
-- `request.resource.data`（リクエストボディ）を context に設定
-- `request.time` を現在時刻の Timestamp として設定
-- `request.query` パラメータの取得と設定
-- `resource.data` の設定（update/delete 時に既存データを取得）
-- カスタムクレーム対応の認証（`auth.token.*`）
-
-### Step 15: テスト
-
-各モジュールに対して網羅的なユニットテストを作成する。
-既存の `rules-engine.test.ts` と `rules-middleware.test.ts` のテストケースは
-すべてパスし続けるようにする（後方互換性の担保）。
-
-## 実装優先順位
-
-1. **基盤**: ast.ts → lexer.ts → parser.ts → types.ts （これがないと何も動かない）
-2. **コア評価**: evaluator.ts → context.ts → operators.ts （最小限の式評価）
-3. **基本メソッド**: string-methods → list-methods → map-methods （最頻出）
-4. **組み込み関数**: builtin-functions.ts （get/exists）
-5. **追加型**: set-methods → timestamp → duration → latlng → bytes
-6. **名前空間**: math → hashing
-7. **高度な機能**: カスタム関数、let 束縛、再帰ワイルドカード
-8. **統合**: SecurityRulesEngine 改修 → middleware 改修
-9. **テスト**: 各ステップと並行して作成
-
-## 注意事項
-
-- `any` 型は使用禁止（CLAUDE.md の制約）
-- 外部パーサーライブラリは使わず、自前で実装（依存を最小化）
-- 既存テストの後方互換性を維持
-- `get()`/`exists()` は呼び出し回数制限を実装（Firestore の制約: 1ルール評価あたり最大10回）
+- クラウドインフラ依存機能（マルチリージョン、IAM、監査ログ、PITR、BigQuery 連携等）
+- IndexedDB 関連 API（`clearIndexedDbPersistence`, `enableIndexedDbPersistence` 等）— ブラウザ専用機能
+- データバンドル（`loadBundle`, `namedQuery`）— 低優先度
+- パイプラインクエリ — 本家でもプレビュー段階
+- キャッシュ管理 API（`persistentLocalCache`, `memoryLocalCache` 等）— ブラウザ専用
+- SSR/CSR 向け API（`documentSnapshotFromJSON`, `querySnapshotFromJSON`, `onSnapshotResume`）— 特殊用途
+- `FieldValue` ベースクラス — 現在の `FieldValueSentinel` アプローチで十分
+- 個別の QueryConstraint サブクラス群 — 現在の `QueryConstraint` インターフェースで統一済み

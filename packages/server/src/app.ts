@@ -15,6 +15,7 @@ import { DocumentService } from "./services/document.js";
 import type { ListenerManager } from "./services/listener-manager.js";
 import { QueryService } from "./services/query.js";
 import { TransactionService } from "./services/transaction.js";
+import type { TriggerService } from "./services/trigger.js";
 import { DocumentRepository } from "./storage/repository.js";
 
 export interface AppOptions {
@@ -22,6 +23,7 @@ export interface AppOptions {
   metricsCollector?: MetricsCollector;
   securityRules?: SecurityRulesEngine;
   authProvider?: AuthProvider;
+  triggerService?: TriggerService;
 }
 
 export function createApp(
@@ -34,9 +36,18 @@ export function createApp(
   const queryService = new QueryService(db);
   const transactionService = new TransactionService(db);
 
-  const onDocumentChange = listenerManager
-    ? (path: string) => listenerManager.notifyChange(path, (p) => documentService.getDocument(p))
-    : undefined;
+  const triggerService = options?.triggerService;
+
+  const onDocumentChange =
+    listenerManager || triggerService
+      ? (path: string, oldDocument?: ReturnType<typeof documentService.getDocument>) => {
+          listenerManager?.notifyChange(path, (p) => documentService.getDocument(p));
+          const newDocument = documentService.getDocument(path);
+          triggerService?.notifyChange(path, oldDocument, newDocument).catch((err) => {
+            console.error("Trigger execution error:", err);
+          });
+        }
+      : undefined;
 
   const app = new Hono();
 

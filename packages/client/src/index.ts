@@ -21,6 +21,8 @@ export {
 export { WriteBatch, writeBatch } from "./batch.js";
 // Data types
 export { Bytes } from "./bytes.js";
+// Equality comparisons
+export { queryEqual, refEqual, snapshotEqual } from "./comparisons.js";
 // Connection management
 export type { ConnectionState, ReconnectOptions } from "./connection.js";
 export { ConnectionManager, getConnectionManager } from "./connection.js";
@@ -34,17 +36,37 @@ export {
   increment,
   serverTimestamp,
 } from "./field-values.js";
-export type { FirestoreSettings } from "./firestore.js";
-export { getFirestore, initializeFirestore } from "./firestore.js";
+export type { FirestoreSettings, LogLevel } from "./firestore.js";
+export {
+  disableNetwork,
+  enableNetwork,
+  getFirestore,
+  initializeFirestore,
+  setLogLevel,
+  terminate,
+  waitForPendingWrites,
+} from "./firestore.js";
 export { GeoPoint } from "./geo-point.js";
 // Real-time listeners
-export type { DocumentChange, DocumentChangeType, Unsubscribe } from "./listener.js";
+export type {
+  DocumentChange,
+  DocumentChangeType,
+  SnapshotObserver,
+  Unsubscribe,
+} from "./listener.js";
 export { onSnapshot, onSnapshotsInSync } from "./listener.js";
-export type { Query, QueryConstraint } from "./query.js";
+export type {
+  Query,
+  QueryConstraint,
+  QueryConstraintType,
+  QueryFilterConstraint,
+  QueryNonFilterConstraint,
+} from "./query.js";
 // Query operations
 export {
   and,
   collectionGroup,
+  documentId,
   endAt,
   endBefore,
   getDocs,
@@ -68,8 +90,15 @@ export { runTransaction, Transaction } from "./transaction.js";
 // Transport & Errors
 export { FirestoreError } from "./transport.js";
 // Types
-export type { CollectionReference, DocumentReference, Firestore } from "./types.js";
-export { DocumentSnapshot, FieldPath, Timestamp } from "./types.js";
+export type {
+  CollectionReference,
+  DocumentReference,
+  Firestore,
+  SnapshotOptions,
+} from "./types.js";
+export { DocumentSnapshot, FieldPath, SnapshotMetadata, Timestamp } from "./types.js";
+// Vector
+export { VectorValue, vector } from "./vector.js";
 // Write queue (offline support)
 export type {
   QueuedWrite,
