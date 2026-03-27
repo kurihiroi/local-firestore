@@ -15,7 +15,7 @@ function createMockTransport() {
 }
 
 function createMockFirestore(transport: ReturnType<typeof createMockTransport>): Firestore {
-  return { type: "firestore", _transport: transport } as Firestore;
+  return { type: "firestore", _transport: transport } as unknown as Firestore;
 }
 
 function createMockDocRef(
@@ -256,7 +256,12 @@ describe("updateDoc()", () => {
     const firestore = createMockFirestore(transport);
     const ref = createMockDocRef(firestore, "users/alice");
 
-    await expect(updateDoc(ref, "field")).rejects.toThrow(
+    // 実装のオーバーロードをバイパスしてフィールドパス形式で値なし呼び出しをテスト
+    const updateDocImpl = updateDoc as unknown as (
+      ref: DocumentReference,
+      field: string,
+    ) => Promise<void>;
+    await expect(updateDocImpl(ref, "field")).rejects.toThrow(
       "updateDoc with field path requires a value argument",
     );
   });

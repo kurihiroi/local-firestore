@@ -16,7 +16,7 @@ function createMockTransport() {
 }
 
 function createMockFirestore(transport: ReturnType<typeof createMockTransport>): Firestore {
-  return { type: "firestore", _transport: transport } as Firestore;
+  return { type: "firestore", _transport: transport } as unknown as Firestore;
 }
 
 function createMockDocRef(firestore: Firestore, path: string): DocumentReference {
