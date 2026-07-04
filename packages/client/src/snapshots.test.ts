@@ -143,6 +143,23 @@ describe("QuerySnapshot", () => {
     expect(snapshot.docChanges()).toEqual([]);
   });
 
+  it("docChanges()はSnapshotListenOptionsを受け取れる（ローカルではno-op）", () => {
+    const docs = makeDocs(1);
+    const changes = [
+      {
+        type: "added" as const,
+        doc: docs[0],
+        oldIndex: -1,
+        newIndex: 0,
+      },
+    ];
+    const snapshot = new QuerySnapshot(docs, changes);
+    expect(snapshot.docChanges({ includeMetadataChanges: true })).toHaveLength(1);
+    expect(snapshot.docChanges({ includeMetadataChanges: false, source: "default" })).toEqual(
+      snapshot.docChanges(),
+    );
+  });
+
   it("metadataを持つ", () => {
     const snapshot = new QuerySnapshot([]);
     expect(snapshot.metadata).toBeInstanceOf(SnapshotMetadata);

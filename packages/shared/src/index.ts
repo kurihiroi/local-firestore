@@ -38,13 +38,16 @@ export type {
 } from "./protocol.js";
 export { isFieldValueSentinel } from "./protocol.js";
 export type {
+  AddPrefixToKeys,
   AggregateType,
+  ChildUpdateFields,
   DocumentData,
   DocumentMetadata,
   FieldValueSentinel,
   FieldValueType,
   FirestoreDataConverter,
   FirestoreErrorCode,
+  NestedUpdateFields,
   OrderByDirection,
   PartialWithFieldValue,
   QueryConstraintType,
@@ -63,6 +66,7 @@ export type {
   SerializedVectorValue,
   SerializedWhereConstraint,
   SetOptions,
+  UpdateData,
   VectorDistanceMeasure,
   WhereFilterOp,
   WithFieldValue,

@@ -6,6 +6,7 @@ import type {
   PartialWithFieldValue,
   SetDocumentRequest,
   SetOptions,
+  UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
 import { logDebug } from "./logger.js";
@@ -115,7 +116,7 @@ export async function addDoc<T = DocumentData>(
 /** ドキュメントを部分更新する */
 export async function updateDoc<T = DocumentData>(
   reference: DocumentReference<T>,
-  data: Partial<T>,
+  data: UpdateData<T>,
 ): Promise<void>;
 export async function updateDoc<T = DocumentData>(
   reference: DocumentReference<T>,
@@ -125,11 +126,11 @@ export async function updateDoc<T = DocumentData>(
 ): Promise<void>;
 export async function updateDoc<T = DocumentData>(
   reference: DocumentReference<T>,
-  dataOrField: Partial<T> | string | FieldPath,
+  dataOrField: UpdateData<T> | string | FieldPath,
   ...moreFieldsAndValues: unknown[]
 ): Promise<void> {
   const transport = reference._firestore._transport;
-  let data: Partial<T>;
+  let data: UpdateData<T>;
 
   if (typeof dataOrField === "string" || dataOrField instanceof FieldPath) {
     // フィールドパス形式: updateDoc(ref, field, value, field2, value2, ...)
@@ -147,7 +148,7 @@ export async function updateDoc<T = DocumentData>(
       const keyStr = key instanceof FieldPath ? key.toString() : String(key);
       setNestedValue(obj, keyStr, val);
     }
-    data = obj as Partial<T>;
+    data = obj as UpdateData<T>;
   } else {
     data = dataOrField;
   }

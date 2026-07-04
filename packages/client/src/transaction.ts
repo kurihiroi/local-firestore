@@ -4,6 +4,7 @@ import type {
   GetDocumentResponse,
   TransactionBeginResponse,
   TransactionCommitResponse,
+  UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
 import { ERROR_CODES } from "@local-firestore/shared";
@@ -101,7 +102,7 @@ export class Transaction {
     return this;
   }
 
-  update<T = DocumentData>(ref: DocumentReference<T>, data: Partial<T>): this {
+  update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this {
     this.operations.push({
       type: "update",
       path: ref.path,

@@ -4,6 +4,7 @@ export type {
   FirestoreErrorCode,
   PartialWithFieldValue,
   SetOptions,
+  UpdateData,
   VectorDistanceMeasure,
   WithFieldValue,
 } from "@local-firestore/shared";
@@ -52,6 +53,8 @@ export { GeoPoint } from "./geo-point.js";
 export type {
   DocumentChange,
   DocumentChangeType,
+  ListenSource,
+  SnapshotListenOptions,
   SnapshotObserver,
   Unsubscribe,
 } from "./listener.js";

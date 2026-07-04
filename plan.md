@@ -208,8 +208,24 @@ Phase 1〜6 すべて実装・配線・テスト済み。
 ### 軽微な残課題（解消済み・仕様扱い）
 
 - 型中心の項目（2-2 `SnapshotOptions`、2-4 `firestore`/`converter` getter、2-5 クエリ制約型）の専用テストを整備済み
-- `onSnapshot` の Observer 形式（1-7）で `complete` コールバックは型定義のみで呼び出されない（ローカルエミュレータには完了イベントが存在しないため実質仕様）
+- `onSnapshot` の Observer 形式（1-7）で `complete` コールバックは型定義のみで呼び出されない。**これは本家 Firebase SDK と同一の挙動**: スナップショットのストリームは終了しないため、本家でも `complete` は決して呼ばれないと明記されている。`complete` は汎用オブザーバーインターフェースとの型互換のためだけに存在する（= 仕様であり実装漏れではない）
 - Phase 5-1 のトリガー登録は Webhook（`POST /triggers`）と Node.js API（ライブラリ利用時）の2方式に対応済みだが、本家 Cloud Functions emulator のプロトコル互換はなし（必要になった時点で別途検討）
+
+### 追加実装（2026-07-04 第2弾）
+
+plan.md 当初スコープ外だった本家 SDK API のうち、需要の高いものを追加実装:
+
+- **`UpdateData<T>` 型**（shared）: `"nested.field"` のようなドット記法キーを型付けするネストフィールド更新型。`updateDoc` / `WriteBatch.update` / `Transaction.update` の引数型を `Partial<T>` から `UpdateData<T>` に変更（FieldValue センチネルも型として許可されるようになった）
+- **`SnapshotListenOptions` / `ListenSource` 型 + `onSnapshot` のオプション付きオーバーロード**（client）: `onSnapshot(ref, { includeMetadataChanges }, ...)` 形式を受け付ける。ローカルでは metadata（`hasPendingWrites` / `fromCache`）が変化しないため動作は no-op（型互換目的）。`QuerySnapshot.docChanges(options?)` も同様
+- **セキュリティルール E2E テスト T11.6**: `get()` / `exists()` + `$(variable)` パス補間によるクロスドキュメント参照の E2E テストを追加（パス補間の実装は完了済みだったが E2E テストが未整備だった）。併せて E2E ヘルパーの DocumentResolver が `/databases/<dbId>/documents/` プレフィックス付き完全パスを解決できるよう修正
+
+### 未実装のまま残っている本家 SDK API（低優先度）
+
+需要が生じた時点で個別に検討する:
+
+- `connectFirestoreEmulator()` — ローカル実装では `getFirestore(settings)` で直接ホスト/ポートを指定するため実質不要（移行互換シムとしての価値のみ）
+- `getDocFromCache()` / `getDocFromServer()` / `getDocsFromCache()` / `getDocsFromServer()` — クライアントに `SnapshotCache` はあるが、キャッシュ優先読み取り API は未配線
+- `aggregateFieldEqual()` / `aggregateQuerySnapshotEqual()` — 集計系の等値比較ヘルパー
 
 ---
 
