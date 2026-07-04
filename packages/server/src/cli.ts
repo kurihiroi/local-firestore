@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
@@ -5,6 +6,8 @@ import type { LogLevel } from "./middleware/logger.js";
 import { JsonLogOutput, Logger } from "./middleware/logger.js";
 import type { AuthProvider } from "./security/auth-provider.js";
 import { LocalAuthProvider } from "./security/auth-provider.js";
+import type { SecurityRules } from "./security/rules-engine.js";
+import { SecurityRulesEngine } from "./security/rules-engine.js";
 import { DatabaseManager } from "./services/database-manager.js";
 import { DocumentService } from "./services/document.js";
 import type { IndexValidationMode } from "./services/index-manager.js";
@@ -30,6 +33,31 @@ async function createAuthProvider(logger: Logger): Promise<AuthProvider> {
   }
   logger.info("Using Local Auth provider");
   return new LocalAuthProvider();
+}
+
+/**
+ * RULES_PATH で指定された JSON ファイルからセキュリティルールを読み込む。
+ * 未指定時は undefined（ルール未適用 = 全許可）。
+ */
+function createSecurityRulesEngine(
+  logger: Logger,
+  documentService: DocumentService,
+): SecurityRulesEngine | undefined {
+  const rulesPath = process.env.RULES_PATH;
+  if (!rulesPath) return undefined;
+
+  let rules: SecurityRules;
+  try {
+    rules = JSON.parse(readFileSync(rulesPath, "utf-8")) as SecurityRules;
+  } catch (err) {
+    throw new Error(`Failed to load security rules from ${rulesPath}: ${String(err)}`);
+  }
+
+  const engine = new SecurityRulesEngine(rules, {
+    getDocument: (path) => documentService.getDocument(path)?.data ?? null,
+  });
+  logger.info("Security rules enabled", { rulesPath });
+  return engine;
 }
 
 function createIndexManager(logger: Logger): IndexManager | undefined {
@@ -108,6 +136,9 @@ async function main() {
 
   const authProvider = await createAuthProvider(logger);
 
+  // セキュリティルール（RULES_PATH 指定時のみ有効）
+  const securityRules = createSecurityRulesEngine(logger, documentService);
+
   // Cloud Functions トリガー（POST /triggers で Webhook 登録可能）
   const triggerService = new TriggerService();
 
@@ -120,6 +151,7 @@ async function main() {
   const app = createApp(db, listenerManager, {
     logger,
     authProvider,
+    securityRules,
     triggerService,
     indexManager,
     databaseManager,
@@ -145,6 +177,8 @@ async function main() {
   attachWebSocket(server, {
     listenerManager,
     getDocument: (path) => documentService.getDocument(path),
+    securityRules,
+    authProvider,
     resolveDatabase: (databaseId) => {
       const instance = databaseManager.get(databaseId);
       return {

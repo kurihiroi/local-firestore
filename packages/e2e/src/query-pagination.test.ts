@@ -3,7 +3,9 @@ import {
   doc,
   endAt,
   endBefore,
+  getDoc,
   getDocs,
+  limit,
   limitToLast,
   orderBy,
   type QueryDocumentSnapshot,
@@ -80,5 +82,80 @@ describe("E2E: Query pagination", () => {
     const snap = await getDocs(q);
     const values = snap.docs.map((d: QueryDocumentSnapshot) => d.data().value);
     expect(values).toEqual([1, 3, 2, 4]);
+  });
+});
+
+describe("E2E: Snapshot cursor pagination", () => {
+  let ctx: TestContext;
+
+  beforeAll(async () => {
+    ctx = await startTestServer();
+    const col = collection(ctx.firestore, "snapPages");
+    // score が同値のドキュメントを含める（__name__ タイブレークの検証用）
+    await setDoc(doc(col, "a"), { name: "A", score: 10 });
+    await setDoc(doc(col, "b"), { name: "B", score: 20 });
+    await setDoc(doc(col, "c"), { name: "C", score: 20 });
+    await setDoc(doc(col, "d"), { name: "D", score: 30 });
+    await setDoc(doc(col, "e"), { name: "E", score: 40 });
+  });
+
+  afterAll(async () => {
+    await ctx.cleanup();
+  });
+
+  it("startAfter(snapshot) で次のページを取得できる", async () => {
+    const col = collection(ctx.firestore, "snapPages");
+    const page1 = await getDocs(query(col, orderBy("score"), limit(2)));
+    expect(page1.docs.map((d: QueryDocumentSnapshot) => d.id)).toEqual(["a", "b"]);
+
+    const lastDoc = page1.docs[page1.size - 1];
+    const page2 = await getDocs(query(col, orderBy("score"), startAfter(lastDoc), limit(2)));
+    expect(page2.docs.map((d: QueryDocumentSnapshot) => d.id)).toEqual(["c", "d"]);
+
+    const page3 = await getDocs(
+      query(col, orderBy("score"), startAfter(page2.docs[page2.size - 1]), limit(2)),
+    );
+    expect(page3.docs.map((d: QueryDocumentSnapshot) => d.id)).toEqual(["e"]);
+  });
+
+  it("同値フィールドでも __name__ タイブレークで正しくスキップされる", async () => {
+    const col = collection(ctx.firestore, "snapPages");
+    // b と c は score=20 で同値。b のスナップショットで startAfter すると c から始まる
+    const all = await getDocs(query(col, orderBy("score")));
+    const bSnap = all.docs.find((d: QueryDocumentSnapshot) => d.id === "b");
+    if (!bSnap) throw new Error("doc b not found");
+
+    const after = await getDocs(query(col, orderBy("score"), startAfter(bSnap)));
+    expect(after.docs.map((d: QueryDocumentSnapshot) => d.id)).toEqual(["c", "d", "e"]);
+  });
+
+  it("startAt / endAt にもスナップショットを渡せる", async () => {
+    const col = collection(ctx.firestore, "snapPages");
+    const all = await getDocs(query(col, orderBy("score")));
+    const cSnap = all.docs.find((d: QueryDocumentSnapshot) => d.id === "c");
+    const dSnap = all.docs.find((d: QueryDocumentSnapshot) => d.id === "d");
+    if (!cSnap || !dSnap) throw new Error("docs not found");
+
+    const range = await getDocs(query(col, orderBy("score"), startAt(cSnap), endAt(dSnap)));
+    expect(range.docs.map((d: QueryDocumentSnapshot) => d.id)).toEqual(["c", "d"]);
+  });
+
+  it("getDoc の DocumentSnapshot もカーソルに使える", async () => {
+    const col = collection(ctx.firestore, "snapPages");
+    const bDoc = await getDoc(doc(col, "b"));
+    expect(bDoc.exists()).toBe(true);
+
+    const after = await getDocs(query(col, orderBy("score"), startAfter(bDoc)));
+    expect(after.docs.map((d: QueryDocumentSnapshot) => d.id)).toEqual(["c", "d", "e"]);
+  });
+
+  it("orderBy なしの snapshot カーソルは __name__ 順で機能する", async () => {
+    const col = collection(ctx.firestore, "snapPages");
+    const all = await getDocs(query(col, orderBy("__name__")));
+    const cSnap = all.docs.find((d: QueryDocumentSnapshot) => d.id === "c");
+    if (!cSnap) throw new Error("doc c not found");
+
+    const after = await getDocs(query(col, startAfter(cSnap)));
+    expect(after.docs.map((d: QueryDocumentSnapshot) => d.id)).toEqual(["d", "e"]);
   });
 });

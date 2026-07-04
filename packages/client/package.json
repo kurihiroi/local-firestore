@@ -24,6 +24,14 @@
   "dependencies": {
     "@local-firestore/shared": "workspace:*"
   },
+  "peerDependencies": {
+    "firebase": ">=9.0.0"
+  },
+  "peerDependenciesMeta": {
+    "firebase": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "tsup": "^8.0.0",
     "vitest": "^3.0.0"

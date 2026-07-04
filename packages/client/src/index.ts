@@ -38,8 +38,14 @@ export {
   increment,
   serverTimestamp,
 } from "./field-values.js";
-export type { FirestoreSettings, LogLevel } from "./firestore.js";
+export type {
+  ConnectFirestoreEmulatorOptions,
+  EmulatorMockTokenOptions,
+  FirestoreSettings,
+  LogLevel,
+} from "./firestore.js";
 export {
+  connectFirestoreEmulator,
   disableNetwork,
   enableNetwork,
   getFirestore,

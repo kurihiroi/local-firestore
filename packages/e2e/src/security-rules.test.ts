@@ -1,3 +1,11 @@
+import {
+  collection,
+  doc,
+  type FirestoreError,
+  getFirestore,
+  onSnapshot,
+  terminate,
+} from "@local-firestore/client";
 import type { SecurityRules } from "@local-firestore/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startTestServer, type TestContext } from "./helpers.js";
@@ -349,6 +357,199 @@ describe("E2E: Security rules", () => {
       // Unauthenticated cannot read
       const noAuth = await fetchWithAuth(ctx.port, "GET", "/docs/adminArea/doc1");
       expect(noAuth.status).toBe(403);
+    });
+  });
+
+  describe("query / batch / transaction rules (E2E)", () => {
+    let ctx: TestContext;
+    const rules: SecurityRules = {
+      rules: {
+        authOnly: { read: "request.auth != null", write: "request.auth != null" },
+      },
+    };
+
+    beforeAll(async () => {
+      ctx = await startTestServer({ securityRules: rules });
+      await fetchWithAuth(ctx.port, "PUT", "/docs/authOnly/doc1", { data: { value: 1 } }, "user1");
+    });
+
+    afterAll(async () => {
+      await ctx.cleanup();
+    });
+
+    it("should enforce list rule on POST /query", async () => {
+      const denied = await fetchWithAuth(ctx.port, "POST", "/query", {
+        collectionPath: "authOnly",
+        constraints: [],
+      });
+      expect(denied.status).toBe(403);
+
+      const allowed = await fetchWithAuth(
+        ctx.port,
+        "POST",
+        "/query",
+        { collectionPath: "authOnly", constraints: [] },
+        "user1",
+      );
+      expect(allowed.status).toBe(200);
+    });
+
+    it("should enforce list rule on POST /aggregate", async () => {
+      const denied = await fetchWithAuth(ctx.port, "POST", "/aggregate", {
+        collectionPath: "authOnly",
+        constraints: [],
+        aggregateSpec: { total: { aggregateType: "count" } },
+      });
+      expect(denied.status).toBe(403);
+    });
+
+    it("should enforce write rules on POST /batch", async () => {
+      const denied = await fetchWithAuth(ctx.port, "POST", "/batch", {
+        operations: [{ type: "set", path: "authOnly/doc2", data: { value: 2 } }],
+      });
+      expect(denied.status).toBe(403);
+
+      const allowed = await fetchWithAuth(
+        ctx.port,
+        "POST",
+        "/batch",
+        { operations: [{ type: "set", path: "authOnly/doc2", data: { value: 2 } }] },
+        "user1",
+      );
+      expect(allowed.status).toBe(200);
+    });
+
+    it("should enforce rules on transaction get / commit", async () => {
+      const beginRes = await fetchWithAuth(ctx.port, "POST", "/transaction/begin");
+      const { transactionId } = (await beginRes.json()) as { transactionId: string };
+
+      const getDenied = await fetchWithAuth(ctx.port, "POST", "/transaction/get", {
+        transactionId,
+        path: "authOnly/doc1",
+      });
+      expect(getDenied.status).toBe(403);
+
+      const commitDenied = await fetchWithAuth(ctx.port, "POST", "/transaction/commit", {
+        transactionId,
+        operations: [{ type: "set", path: "authOnly/doc3", data: { value: 3 } }],
+      });
+      expect(commitDenied.status).toBe(403);
+    });
+  });
+
+  describe("realtime listener rules (WebSocket)", () => {
+    let ctx: TestContext;
+    const rules: SecurityRules = {
+      rules: {
+        public: { read: true, write: true },
+        authOnly: { read: "request.auth != null", write: "request.auth != null" },
+      },
+    };
+
+    beforeAll(async () => {
+      ctx = await startTestServer({ securityRules: rules });
+      await fetchWithAuth(ctx.port, "PUT", "/docs/public/doc1", { data: { value: 1 } });
+      await fetchWithAuth(ctx.port, "PUT", "/docs/authOnly/doc1", { data: { value: 1 } }, "user1");
+    });
+
+    afterAll(async () => {
+      await ctx.cleanup();
+    });
+
+    it("should deny unauthenticated doc listener with permission-denied", async () => {
+      const db = getFirestore({ host: "localhost", port: ctx.port });
+      try {
+        const error = await new Promise<FirestoreError>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout: no error received")), 5000);
+          onSnapshot(
+            doc(collection(db, "authOnly"), "doc1"),
+            () => {
+              clearTimeout(timer);
+              reject(new Error("snapshot should not be delivered"));
+            },
+            (err) => {
+              clearTimeout(timer);
+              resolve(err);
+            },
+          );
+        });
+        expect(error.code).toBe("permission-denied");
+      } finally {
+        await terminate(db);
+      }
+    });
+
+    it("should deliver doc snapshots to authenticated listener", async () => {
+      const db = getFirestore({
+        host: "localhost",
+        port: ctx.port,
+        authTokenProvider: () => "user1",
+      });
+      try {
+        const value = await new Promise<unknown>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout: no snapshot")), 5000);
+          onSnapshot(
+            doc(collection(db, "authOnly"), "doc1"),
+            (snap) => {
+              clearTimeout(timer);
+              resolve(snap.data()?.value);
+            },
+            (err) => {
+              clearTimeout(timer);
+              reject(err);
+            },
+          );
+        });
+        expect(value).toBe(1);
+      } finally {
+        await terminate(db);
+      }
+    });
+
+    it("should deny unauthenticated query listener with permission-denied", async () => {
+      const db = getFirestore({ host: "localhost", port: ctx.port });
+      try {
+        const error = await new Promise<FirestoreError>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout: no error received")), 5000);
+          onSnapshot(
+            collection(db, "authOnly"),
+            () => {
+              clearTimeout(timer);
+              reject(new Error("snapshot should not be delivered"));
+            },
+            (err) => {
+              clearTimeout(timer);
+              resolve(err);
+            },
+          );
+        });
+        expect(error.code).toBe("permission-denied");
+      } finally {
+        await terminate(db);
+      }
+    });
+
+    it("should deliver query snapshots to listener on public collection without auth", async () => {
+      const db = getFirestore({ host: "localhost", port: ctx.port });
+      try {
+        const size = await new Promise<number>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout: no snapshot")), 5000);
+          onSnapshot(
+            collection(db, "public"),
+            (snap) => {
+              clearTimeout(timer);
+              resolve(snap.size);
+            },
+            (err) => {
+              clearTimeout(timer);
+              reject(err);
+            },
+          );
+        });
+        expect(size).toBe(1);
+      } finally {
+        await terminate(db);
+      }
     });
   });
 

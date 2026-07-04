@@ -37,6 +37,14 @@ export interface SubscriptionInfo {
 }
 
 /**
+ * サブスクライブメッセージのファクトリ
+ *
+ * 送信のたびに呼び出される。認証トークンなど送信時点の情報を
+ * メッセージに含めるために関数形式を使う（再接続時に再評価される）。
+ */
+export type SubscriptionMessageFactory = () => string | Promise<string>;
+
+/**
  * WebSocket接続を管理し、自動再接続・サブスクリプション再登録を行う
  */
 export class ConnectionManager {
@@ -48,7 +56,7 @@ export class ConnectionManager {
   private wsUrl: string;
 
   /** アクティブなサブスクリプション（再接続時に再登録） */
-  private subscriptions = new Map<string, string>();
+  private subscriptions = new Map<string, SubscriptionMessageFactory>();
   /** メッセージハンドラ */
   private messageHandler: ((msg: ServerMessage) => void) | null = null;
   /** 接続状態リスナー */
@@ -100,8 +108,9 @@ export class ConnectionManager {
       this.connectResolve?.();
 
       // 再接続時：既存のサブスクリプションを再登録
-      for (const message of this.subscriptions.values()) {
-        this.ws?.send(message);
+      // （ファクトリを再評価するため、認証トークンも最新のものが使われる）
+      for (const factory of this.subscriptions.values()) {
+        this.resolveAndSend(factory);
       }
     };
 
@@ -145,9 +154,29 @@ export class ConnectionManager {
   }
 
   /** サブスクリプションを登録する */
-  registerSubscription(id: string, message: string): void {
-    this.subscriptions.set(id, message);
-    this.send(message);
+  registerSubscription(id: string, message: string | SubscriptionMessageFactory): void {
+    const factory = typeof message === "string" ? () => message : message;
+    this.subscriptions.set(id, factory);
+    this.resolveAndSend(factory);
+  }
+
+  /** ファクトリを評価してメッセージを送信する（同期的に解決できる場合は即時送信） */
+  private resolveAndSend(factory: SubscriptionMessageFactory): void {
+    let result: string | Promise<string>;
+    try {
+      result = factory();
+    } catch (err) {
+      logError(`Failed to build subscribe message: ${String(err)}`);
+      return;
+    }
+    if (typeof result === "string") {
+      this.send(result);
+      return;
+    }
+    result.then(
+      (message) => this.send(message),
+      (err) => logError(`Failed to build subscribe message: ${String(err)}`),
+    );
   }
 
   /** サブスクリプションを解除する */
@@ -219,6 +248,15 @@ export class ConnectionManager {
 
 /** Firestoreインスタンスごとの ConnectionManager */
 const connectionManagers = new WeakMap<Firestore, ConnectionManager>();
+
+/**
+ * ConnectionManager が既に作成済みか（= リスナー等で接続が開始済みか）
+ *
+ * `connectFirestoreEmulator()` が「使用開始後の接続先変更」を検出するために使う。
+ */
+export function hasConnectionManager(firestore: Firestore): boolean {
+  return connectionManagers.has(firestore);
+}
 
 /**
  * FirestoreインスタンスのConnectionManagerを取得または作成する

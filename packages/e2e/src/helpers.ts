@@ -40,8 +40,10 @@ export async function startTestServer(options?: TestServerOptions): Promise<Test
   const databaseManager = new DatabaseManager(":memory:");
 
   const appOptions: AppOptions = { databaseManager };
+  let securityRulesEngine: SecurityRulesEngine | undefined;
+  let authProvider: LocalAuthProvider | undefined;
   if (options?.securityRules) {
-    appOptions.securityRules = new SecurityRulesEngine(options.securityRules, {
+    securityRulesEngine = new SecurityRulesEngine(options.securityRules, {
       getDocument: (path) => {
         // ルール式の get()/exists() は `/databases/<dbId>/documents/<docPath>` 形式の
         // 完全パスを渡してくるため、ドキュメントパスへ変換する
@@ -50,7 +52,9 @@ export async function startTestServer(options?: TestServerOptions): Promise<Test
         return doc ? (doc.data as Record<string, unknown>) : null;
       },
     });
-    appOptions.authProvider = new LocalAuthProvider();
+    authProvider = new LocalAuthProvider();
+    appOptions.securityRules = securityRulesEngine;
+    appOptions.authProvider = authProvider;
   }
 
   const app = createApp(db, listenerManager, appOptions);
@@ -64,6 +68,8 @@ export async function startTestServer(options?: TestServerOptions): Promise<Test
   attachWebSocket(server, {
     listenerManager,
     getDocument: (path) => documentService.getDocument(path),
+    securityRules: securityRulesEngine,
+    authProvider,
     resolveDatabase: (databaseId) => {
       const instance = databaseManager.get(databaseId);
       return {

@@ -238,14 +238,17 @@ export function onSnapshotDoc<T = DocumentData>(
     converter: ref._converter as FirestoreDataConverter<unknown> | null,
   });
 
-  const message = JSON.stringify({
-    type: "subscribe_doc",
-    subscriptionId,
-    path: ref.path,
-    databaseId: getSubscribeDatabaseId(firestore),
-  });
+  // 認証トークンは送信のたびに取得する（再接続時にも最新のトークンが使われる）
+  const buildMessage = async () =>
+    JSON.stringify({
+      type: "subscribe_doc",
+      subscriptionId,
+      path: ref.path,
+      databaseId: getSubscribeDatabaseId(firestore),
+      authToken: (await firestore._transport.getAuthToken()) ?? undefined,
+    });
 
-  manager.registerSubscription(subscriptionId, message);
+  manager.registerSubscription(subscriptionId, buildMessage);
 
   return () => {
     subscriptionCallbacks.delete(subscriptionId);
@@ -295,16 +298,19 @@ export function onSnapshotQuery<T = DocumentData>(
     constraints = queryOrRef.constraints;
   }
 
-  const message = JSON.stringify({
-    type: "subscribe_query",
-    subscriptionId,
-    collectionPath,
-    collectionGroup,
-    constraints,
-    databaseId: getSubscribeDatabaseId(firestore),
-  });
+  // 認証トークンは送信のたびに取得する（再接続時にも最新のトークンが使われる）
+  const buildMessage = async () =>
+    JSON.stringify({
+      type: "subscribe_query",
+      subscriptionId,
+      collectionPath,
+      collectionGroup,
+      constraints,
+      databaseId: getSubscribeDatabaseId(firestore),
+      authToken: (await firestore._transport.getAuthToken()) ?? undefined,
+    });
 
-  manager.registerSubscription(subscriptionId, message);
+  manager.registerSubscription(subscriptionId, buildMessage);
 
   return () => {
     subscriptionCallbacks.delete(subscriptionId);
