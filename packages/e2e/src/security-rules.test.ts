@@ -351,4 +351,79 @@ describe("E2E: Security rules", () => {
       expect(noAuth.status).toBe(403);
     });
   });
+
+  describe("cross-document references with get()/exists()", () => {
+    let ctx: TestContext;
+    const rules: SecurityRules = {
+      rules: {
+        admins: { read: true, write: true },
+        secured: {
+          read: "exists(path('/databases/(default)/documents/admins/$(request.auth.uid)'))",
+          write:
+            "get(path('/databases/(default)/documents/admins/$(request.auth.uid)')).role == 'editor'",
+        },
+      },
+    };
+
+    beforeAll(async () => {
+      ctx = await startTestServer({ securityRules: rules });
+      // アクセス制御の参照先となる管理者ドキュメントを事前投入
+      await fetchWithAuth(ctx.port, "PUT", "/docs/admins/editor1", {
+        data: { role: "editor" },
+      });
+      await fetchWithAuth(ctx.port, "PUT", "/docs/admins/viewer1", {
+        data: { role: "viewer" },
+      });
+    });
+
+    afterAll(async () => {
+      await ctx.cleanup();
+    });
+
+    it("T11.6: get()/exists() should enforce cross-document access control", async () => {
+      // editor ロールのユーザーは書き込み可能（get() で role を参照）
+      const editorWrite = await fetchWithAuth(
+        ctx.port,
+        "PUT",
+        "/docs/secured/doc1",
+        { data: { value: 1 } },
+        "editor1",
+      );
+      expect(editorWrite.status).toBe(200);
+
+      // admins に存在しても role != editor なら書き込み不可
+      const viewerWrite = await fetchWithAuth(
+        ctx.port,
+        "PUT",
+        "/docs/secured/doc2",
+        { data: { value: 2 } },
+        "viewer1",
+      );
+      expect(viewerWrite.status).toBe(403);
+
+      // admins にドキュメントが存在するユーザーは読み取り可能（exists()）
+      const viewerRead = await fetchWithAuth(
+        ctx.port,
+        "GET",
+        "/docs/secured/doc1",
+        undefined,
+        "viewer1",
+      );
+      expect(viewerRead.status).toBe(200);
+
+      // admins に存在しないユーザーは読み取り不可
+      const strangerRead = await fetchWithAuth(
+        ctx.port,
+        "GET",
+        "/docs/secured/doc1",
+        undefined,
+        "stranger",
+      );
+      expect(strangerRead.status).toBe(403);
+
+      // 未認証は request.auth が null のため評価エラーとなり拒否される
+      const anonRead = await fetchWithAuth(ctx.port, "GET", "/docs/secured/doc1");
+      expect(anonRead.status).toBe(403);
+    });
+  });
 });

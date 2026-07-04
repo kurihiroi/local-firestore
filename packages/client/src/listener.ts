@@ -303,11 +303,37 @@ export function onSnapshotQuery<T = DocumentData>(
   };
 }
 
-/** Observer オブジェクト形式 */
+/**
+ * Observer オブジェクト形式
+ *
+ * `complete` は呼び出されない。スナップショットのストリームは終了しないため、
+ * 本家 Firebase SDK でも complete は呼ばれない仕様であり、型互換のためだけに存在する。
+ */
 export interface SnapshotObserver<S> {
   next?: (snapshot: S) => void;
   error?: (error: FirestoreError) => void;
   complete?: () => void;
+}
+
+/** リスナーのソース指定（ローカルでは常にサーバーから配信されるため実質 no-op） */
+export type ListenSource = "default" | "cache";
+
+/**
+ * リスナーオプション
+ *
+ * ローカルエミュレータでは metadata（hasPendingWrites / fromCache）が変化しないため
+ * `includeMetadataChanges` は no-op。`source` も常にサーバー配信のため no-op。
+ * 本家 SDK からの移行コードが型エラーなく動作するために受け付ける。
+ */
+export interface SnapshotListenOptions {
+  readonly includeMetadataChanges?: boolean;
+  readonly source?: ListenSource;
+}
+
+/** 引数が SnapshotListenOptions かどうか判定する（observer / callback と区別） */
+function isSnapshotListenOptions(value: unknown): value is SnapshotListenOptions {
+  if (typeof value !== "object" || value === null) return false;
+  return !("next" in value) && !("error" in value) && !("complete" in value);
 }
 
 /**
@@ -325,6 +351,17 @@ export function onSnapshot<T = DocumentData>(
   observer: SnapshotObserver<DocumentSnapshot<T>>,
 ): Unsubscribe;
 export function onSnapshot<T = DocumentData>(
+  ref: DocumentReference<T>,
+  options: SnapshotListenOptions,
+  onNext: (snapshot: DocumentSnapshot<T>) => void,
+  onError?: (error: FirestoreError) => void,
+): Unsubscribe;
+export function onSnapshot<T = DocumentData>(
+  ref: DocumentReference<T>,
+  options: SnapshotListenOptions,
+  observer: SnapshotObserver<DocumentSnapshot<T>>,
+): Unsubscribe;
+export function onSnapshot<T = DocumentData>(
   query: Query<T> | CollectionReference<T>,
   onNext: (snapshot: QuerySnapshot<T>) => void,
   onError?: (error: FirestoreError) => void,
@@ -334,14 +371,46 @@ export function onSnapshot<T = DocumentData>(
   observer: SnapshotObserver<QuerySnapshot<T>>,
 ): Unsubscribe;
 export function onSnapshot<T = DocumentData>(
+  query: Query<T> | CollectionReference<T>,
+  options: SnapshotListenOptions,
+  onNext: (snapshot: QuerySnapshot<T>) => void,
+  onError?: (error: FirestoreError) => void,
+): Unsubscribe;
+export function onSnapshot<T = DocumentData>(
+  query: Query<T> | CollectionReference<T>,
+  options: SnapshotListenOptions,
+  observer: SnapshotObserver<QuerySnapshot<T>>,
+): Unsubscribe;
+export function onSnapshot<T = DocumentData>(
   target: DocumentReference<T> | Query<T> | CollectionReference<T>,
-  onNextOrObserver:
+  optionsOrOnNextOrObserver:
+    | SnapshotListenOptions
     | ((snapshot: DocumentSnapshot<T>) => void)
     | ((snapshot: QuerySnapshot<T>) => void)
     | SnapshotObserver<DocumentSnapshot<T>>
     | SnapshotObserver<QuerySnapshot<T>>,
-  onError?: (error: FirestoreError) => void,
+  ...rest: unknown[]
 ): Unsubscribe {
+  // オプション形式の処理（ローカルでは no-op のため読み飛ばすだけ）
+  let onNextOrObserver:
+    | ((snapshot: DocumentSnapshot<T>) => void)
+    | ((snapshot: QuerySnapshot<T>) => void)
+    | SnapshotObserver<DocumentSnapshot<T>>
+    | SnapshotObserver<QuerySnapshot<T>>;
+  let onError: ((error: FirestoreError) => void) | undefined;
+
+  if (
+    typeof optionsOrOnNextOrObserver !== "function" &&
+    isSnapshotListenOptions(optionsOrOnNextOrObserver) &&
+    rest[0] !== undefined
+  ) {
+    onNextOrObserver = rest[0] as typeof onNextOrObserver;
+    onError = rest[1] as ((error: FirestoreError) => void) | undefined;
+  } else {
+    onNextOrObserver = optionsOrOnNextOrObserver as typeof onNextOrObserver;
+    onError = rest[0] as ((error: FirestoreError) => void) | undefined;
+  }
+
   // Observer オブジェクト形式の処理
   let resolvedOnNext:
     | ((snapshot: DocumentSnapshot<T>) => void)

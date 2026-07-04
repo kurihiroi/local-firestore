@@ -1,5 +1,5 @@
 import type { DocumentData } from "@local-firestore/shared";
-import type { DocumentChange } from "./listener.js";
+import type { DocumentChange, SnapshotListenOptions } from "./listener.js";
 import type { Query } from "./query.js";
 import { createCollectionReference, createDocumentReference } from "./references.js";
 import type {
@@ -91,8 +91,12 @@ export class QuerySnapshot<T = DocumentData> {
     this.docs.forEach(callback);
   }
 
-  /** ドキュメントの変更一覧を返す */
-  docChanges(): DocumentChange<T>[] {
+  /**
+   * ドキュメントの変更一覧を返す
+   *
+   * ローカルでは metadata が変化しないため `includeMetadataChanges` は no-op。
+   */
+  docChanges(_options?: SnapshotListenOptions): DocumentChange<T>[] {
     return this._changes;
   }
 }

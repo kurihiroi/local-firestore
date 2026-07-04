@@ -43,7 +43,10 @@ export async function startTestServer(options?: TestServerOptions): Promise<Test
   if (options?.securityRules) {
     appOptions.securityRules = new SecurityRulesEngine(options.securityRules, {
       getDocument: (path) => {
-        const doc = documentService.getDocument(path);
+        // ルール式の get()/exists() は `/databases/<dbId>/documents/<docPath>` 形式の
+        // 完全パスを渡してくるため、ドキュメントパスへ変換する
+        const docPath = path.replace(/^\/databases\/[^/]+\/documents\//, "");
+        const doc = documentService.getDocument(docPath);
         return doc ? (doc.data as Record<string, unknown>) : null;
       },
     });

@@ -2,6 +2,7 @@ import type {
   BatchOperation,
   BatchResponse,
   DocumentData,
+  UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
 import { FirestoreError } from "./transport.js";
@@ -35,7 +36,7 @@ export class WriteBatch {
     return this;
   }
 
-  update<T = DocumentData>(ref: DocumentReference<T>, data: Partial<T>): this {
+  update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this {
     this.ensureNotCommitted();
     this.operations.push({
       type: "update",

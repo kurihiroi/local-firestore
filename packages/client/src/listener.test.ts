@@ -224,6 +224,96 @@ describe("onSnapshot()", () => {
   });
 });
 
+describe("onSnapshot() with SnapshotListenOptions", () => {
+  it("オプション + コールバック形式で呼び出せる（オプションは no-op）", () => {
+    const manager = createMockManager();
+    vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
+      manager as unknown as connectionModule.ConnectionManager,
+    );
+
+    const firestore = createMockFirestore();
+    const ref = createMockDocRef(firestore, "users/alice");
+    const onNext = vi.fn();
+
+    const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, onNext);
+
+    const [subscriptionId, message] = manager.registerSubscription.mock.calls[0];
+    expect(JSON.parse(message).type).toBe("subscribe_doc");
+
+    // スナップショット配信で onNext が呼ばれる（オプションで握りつぶされない）
+    const handler = manager.setMessageHandler.mock.calls[0][0];
+    handler({
+      type: "doc_snapshot",
+      subscriptionId,
+      path: "users/alice",
+      exists: true,
+      data: { name: "Alice" },
+      createTime: "2026-01-01T00:00:00.000Z",
+      updateTime: "2026-01-01T00:00:00.000Z",
+    });
+    expect(onNext).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    vi.restoreAllMocks();
+  });
+
+  it("オプション + コールバック形式で onError も配線される", () => {
+    const manager = createMockManager();
+    vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
+      manager as unknown as connectionModule.ConnectionManager,
+    );
+
+    const firestore = createMockFirestore();
+    const ref = createMockDocRef(firestore, "users/alice");
+    const onNext = vi.fn();
+    const onError = vi.fn();
+
+    const unsubscribe = onSnapshot(ref, { source: "cache" }, onNext, onError);
+
+    const [subscriptionId] = manager.registerSubscription.mock.calls[0];
+    const handler = manager.setMessageHandler.mock.calls[0][0];
+    handler({
+      type: "error",
+      subscriptionId,
+      code: "permission-denied",
+      message: "denied",
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onNext).not.toHaveBeenCalled();
+
+    unsubscribe();
+    vi.restoreAllMocks();
+  });
+
+  it("オプション + Observer 形式で呼び出せる", () => {
+    const manager = createMockManager();
+    vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
+      manager as unknown as connectionModule.ConnectionManager,
+    );
+
+    const firestore = createMockFirestore();
+    const collRef = createMockCollRef(firestore, "users");
+    const next = vi.fn();
+
+    const unsubscribe = onSnapshot(collRef, { includeMetadataChanges: false }, { next });
+
+    const [subscriptionId, message] = manager.registerSubscription.mock.calls[0];
+    expect(JSON.parse(message).type).toBe("subscribe_query");
+
+    const handler = manager.setMessageHandler.mock.calls[0][0];
+    handler({
+      type: "query_snapshot",
+      subscriptionId,
+      docs: [],
+      changes: [],
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    vi.restoreAllMocks();
+  });
+});
+
 describe("onSnapshotsInSync()", () => {
   it("connected状態でコールバックが呼ばれる", () => {
     const manager = createMockManager();

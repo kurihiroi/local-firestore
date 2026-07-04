@@ -125,6 +125,39 @@ export type PartialWithFieldValue<T> = T extends Primitive
     ? { [K in keyof T]?: PartialWithFieldValue<T[K]> | FieldValueSentinel }
     : T;
 
+/** ユニオン型を交差型に変換する */
+type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (
+  k: infer I,
+) => void
+  ? I
+  : never;
+
+/** オブジェクト型の各キーに `Prefix.` を付与した型 */
+export type AddPrefixToKeys<Prefix extends string, T extends Record<string, unknown>> = {
+  [K in keyof T & string as `${Prefix}.${K}`]+?: string extends K ? unknown : T[K];
+};
+
+/** ネストしたオブジェクトのフィールドをドット記法キーに展開する（1階層分） */
+export type ChildUpdateFields<K extends string, V> =
+  V extends Record<string, unknown> ? AddPrefixToKeys<K, UpdateData<V>> : never;
+
+/** ネストした全フィールドのドット記法キーの交差型 */
+export type NestedUpdateFields<T extends Record<string, unknown>> = UnionToIntersection<
+  {
+    [K in keyof T & string]: ChildUpdateFields<K, T[K]>;
+  }[keyof T & string]
+>;
+
+/**
+ * updateDoc 用の型。トップレベルフィールドに加えて
+ * `"nested.field"` のようなドット記法キーでのネストフィールド更新を型付けする。
+ */
+export type UpdateData<T> = T extends Primitive
+  ? T
+  : T extends Record<string, unknown>
+    ? { [K in keyof T]?: UpdateData<T[K]> | FieldValueSentinel } & NestedUpdateFields<T>
+    : Partial<T>;
+
 /**
  * FirestoreDataConverter
  *
