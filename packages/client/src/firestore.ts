@@ -1,23 +1,42 @@
 import { getConnectionManager } from "./connection.js";
 import { logDebug } from "./logger.js";
 import { getWriteQueue, setNetworkEnabled } from "./network-state.js";
+import type { AuthTokenProvider } from "./transport.js";
 import { HttpTransport } from "./transport.js";
 import type { Firestore } from "./types.js";
 
 export type { LogLevel } from "./logger.js";
 export { getLogLevel, setLogLevel } from "./logger.js";
+export type { AuthTokenProvider } from "./transport.js";
 
 export interface FirestoreSettings {
   host?: string;
   port?: number;
   ssl?: boolean;
+  /**
+   * 認証トークンプロバイダー
+   *
+   * リクエストごとに呼び出され、返したトークンが `Authorization: Bearer` ヘッダーで
+   * 送信される。サーバーを `AUTH_PROVIDER=firebase` で起動すると Firebase Auth の
+   * ID トークンとして検証され、セキュリティルールの `request.auth` に反映される。
+   *
+   * 使用例（Firebase Auth 連携）:
+   * ```ts
+   * const db = getFirestore({
+   *   host: "localhost",
+   *   port: 8080,
+   *   authTokenProvider: () => getAuth().currentUser?.getIdToken() ?? null,
+   * });
+   * ```
+   */
+  authTokenProvider?: AuthTokenProvider;
 }
 
-const DEFAULT_SETTINGS: Required<FirestoreSettings> = {
+const DEFAULT_SETTINGS = {
   host: "localhost",
   port: 8080,
   ssl: false,
-};
+} as const;
 
 /** デフォルトデータベースのID */
 const DEFAULT_DATABASE_ID = "(default)";
@@ -37,7 +56,8 @@ export function getFirestore(
     (typeof settingsOrApp === "object" &&
       ("host" in (settingsOrApp as Record<string, unknown>) ||
         "port" in (settingsOrApp as Record<string, unknown>) ||
-        "ssl" in (settingsOrApp as Record<string, unknown>)))
+        "ssl" in (settingsOrApp as Record<string, unknown>) ||
+        "authTokenProvider" in (settingsOrApp as Record<string, unknown>)))
   ) {
     settings = settingsOrApp as FirestoreSettings | undefined;
   }
@@ -50,7 +70,13 @@ export function getFirestore(
     resolvedDatabaseId === DEFAULT_DATABASE_ID
       ? ""
       : `/databases/${encodeURIComponent(resolvedDatabaseId)}`;
-  const transport = new HttpTransport(config.host, config.port, config.ssl, basePath);
+  const transport = new HttpTransport(
+    config.host,
+    config.port,
+    config.ssl,
+    basePath,
+    settings?.authTokenProvider,
+  );
   return {
     type: "firestore",
     _transport: transport,

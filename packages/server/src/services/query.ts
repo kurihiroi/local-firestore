@@ -11,6 +11,26 @@ import type {
   SerializedWhereConstraint,
 } from "@local-firestore/shared";
 import type Database from "better-sqlite3";
+import { nextTypeTag, TYPE_TAG, valueKey, valueTypeTag } from "../storage/firestore-key.js";
+
+/** クエリ制約が本家 Firestore で不正となるケースのエラー */
+export class QueryValidationError extends Error {
+  readonly code = "invalid-argument";
+  constructor(message: string) {
+    super(message);
+    this.name = "QueryValidationError";
+  }
+}
+
+/** 実効 orderBy（暗黙の __name__ タイブレークを含む） */
+interface OrderKey {
+  /** SQL 式（firestore_key(...) または path カラム） */
+  expr: string;
+  direction: "asc" | "desc";
+  /** __name__（ドキュメントパス）順序かどうか */
+  isName: boolean;
+  fieldPath: string;
+}
 
 export class QueryService {
   constructor(private db: Database.Database) {}
@@ -47,45 +67,50 @@ export class QueryService {
         c.type === "endBefore",
     );
 
-    // ORDER BY
-    let orderByClause = "";
-    if (orderBys.length > 0) {
-      const parts = orderBys.map(
-        (o) => `json_extract(data, '$.${escapePath(o.fieldPath)}') ${o.direction.toUpperCase()}`,
+    // 本家同様、limitToLast には orderBy が必須
+    const isLimitToLast = limits.length > 0 && limits[limits.length - 1].type === "limitToLast";
+    if (isLimitToLast && orderBys.length === 0) {
+      throw new QueryValidationError(
+        "limitToLast() queries require specifying at least one orderBy() clause",
       );
-      orderByClause = ` ORDER BY ${parts.join(", ")}`;
     }
 
-    // カーソル条件（orderByが必要）
-    if (cursors.length > 0 && orderBys.length > 0) {
-      for (const cursor of cursors) {
-        const { sql, sqlParams } = buildCursorClause(cursor, orderBys);
-        conditions.push(sql);
-        params.push(...sqlParams);
+    // 実効 orderBy を構築（明示 orderBy + 暗黙の __name__ タイブレーク）
+    const orderKeys = buildOrderKeys(orderBys, constraints);
+
+    // 明示 orderBy 対象フィールドが存在しないドキュメントは除外する（本家と同じ挙動）
+    for (const o of orderBys) {
+      if (o.fieldPath !== "__name__") {
+        conditions.push(`${fieldJsonExpr(o.fieldPath)} IS NOT NULL`);
       }
     }
 
-    // LIMIT
+    // カーソル条件（実効 orderBy に対する辞書式タプル比較）
+    for (const cursor of cursors) {
+      const built = buildCursorClause(cursor, orderKeys, collectionPath);
+      if (built) {
+        conditions.push(built.sql);
+        params.push(...built.sqlParams);
+      }
+    }
+
+    // ORDER BY（limitToLast の場合は方向を反転して LIMIT 後に元へ戻す）
+    const orderByClause = ` ORDER BY ${orderKeys
+      .map((o) => {
+        const dir = isLimitToLast
+          ? o.direction === "asc"
+            ? "DESC"
+            : "ASC"
+          : o.direction.toUpperCase();
+        return `${o.expr} ${dir}`;
+      })
+      .join(", ")}`;
+
+    // LIMIT（複数指定された場合は最後の制約が有効 — 本家と同じ）
     let limitClause = "";
-    let isLimitToLast = false;
-    for (const l of limits) {
-      if (l.type === "limitToLast") {
-        isLimitToLast = true;
-        limitClause = ` LIMIT ?`;
-        params.push(l.limit);
-      } else {
-        limitClause = ` LIMIT ?`;
-        params.push(l.limit);
-      }
-    }
-
-    // limitToLastの場合、ソート方向を反転
-    if (isLimitToLast && orderBys.length > 0) {
-      const parts = orderBys.map((o) => {
-        const reversed = o.direction === "asc" ? "DESC" : "ASC";
-        return `json_extract(data, '$.${escapePath(o.fieldPath)}') ${reversed}`;
-      });
-      orderByClause = ` ORDER BY ${parts.join(", ")}`;
+    if (limits.length > 0) {
+      limitClause = ` LIMIT ?`;
+      params.push(limits[limits.length - 1].limit);
     }
 
     const sql = `SELECT * FROM documents WHERE ${conditions.join(" AND ")}${orderByClause}${limitClause}`;
@@ -215,6 +240,71 @@ export class QueryService {
   }
 }
 
+/** フィールド値を JSON テキストとして取り出す式（欠損時は SQL NULL） */
+function fieldJsonExpr(fieldPath: string): string {
+  return `data -> '$.${escapePath(fieldPath)}'`;
+}
+
+/** フィールド値の Firestore 順序キーを計算する式 */
+function fieldKeyExpr(fieldPath: string): string {
+  return `firestore_key(${fieldJsonExpr(fieldPath)})`;
+}
+
+/**
+ * 実効 orderBy を構築する
+ *
+ * 本家 Firestore と同様に:
+ * - 明示 orderBy が無く不等式フィルタがある場合、その最初のフィールドで暗黙にソート
+ * - 末尾に必ず __name__（ドキュメントパス）の暗黙タイブレークを付与
+ *   （方向は最後の明示 orderBy と同じ）
+ */
+function buildOrderKeys(
+  orderBys: SerializedOrderByConstraint[],
+  constraints: SerializedQueryConstraint[],
+): OrderKey[] {
+  const keys: OrderKey[] = [];
+
+  const explicitFields = new Set<string>();
+  for (const o of orderBys) {
+    explicitFields.add(o.fieldPath);
+    keys.push(
+      o.fieldPath === "__name__"
+        ? { expr: "path", direction: o.direction, isName: true, fieldPath: "__name__" }
+        : {
+            expr: fieldKeyExpr(o.fieldPath),
+            direction: o.direction,
+            isName: false,
+            fieldPath: o.fieldPath,
+          },
+    );
+  }
+
+  if (keys.length === 0) {
+    // 明示 orderBy なし: 最初の不等式フィルタのフィールドで暗黙ソート
+    const inequalityOps = new Set(["<", "<=", ">", ">=", "!=", "not-in"]);
+    const wheres = constraints.filter((c): c is SerializedWhereConstraint => c.type === "where");
+    const firstInequality = wheres.find(
+      (w) => inequalityOps.has(w.op) && w.fieldPath !== "__name__",
+    );
+    if (firstInequality) {
+      keys.push({
+        expr: fieldKeyExpr(firstInequality.fieldPath),
+        direction: "asc",
+        isName: false,
+        fieldPath: firstInequality.fieldPath,
+      });
+    }
+  }
+
+  // 暗黙の __name__ タイブレーク
+  if (!explicitFields.has("__name__")) {
+    const lastDirection = keys.length > 0 ? keys[keys.length - 1].direction : "asc";
+    keys.push({ expr: "path", direction: lastDirection, isName: true, fieldPath: "__name__" });
+  }
+
+  return keys;
+}
+
 /** WHERE条件の共通構築ロジック（executeQuery / executeAggregate 共通） */
 function buildFilterConditions(
   collectionPath: string,
@@ -284,56 +374,67 @@ function buildWhereClause(w: SerializedWhereConstraint): {
         return { sql: `${idExpr} NOT IN (${placeholders})`, sqlParams: values };
       }
       default:
-        throw new Error(`Unsupported operator for documentId(): ${w.op}`);
+        throw new QueryValidationError(`Unsupported operator for documentId(): ${w.op}`);
     }
   }
 
-  const fieldExpr = `json_extract(data, '$.${escapePath(w.fieldPath)}')`;
+  const jsonExpr = fieldJsonExpr(w.fieldPath);
+  const keyExpr = fieldKeyExpr(w.fieldPath);
 
   switch (w.op) {
     case "==":
-      return { sql: `${fieldExpr} = ?`, sqlParams: [toSqlValue(w.value)] };
+      return { sql: `${keyExpr} = ?`, sqlParams: [valueKey(w.value)] };
     case "!=":
-      return { sql: `${fieldExpr} != ?`, sqlParams: [toSqlValue(w.value)] };
+      // 本家と同様、フィールドが存在しない / null のドキュメントはマッチしない
+      return {
+        sql: `(${keyExpr} IS NOT NULL AND ${keyExpr} <> '${TYPE_TAG.null}' AND ${keyExpr} <> ?)`,
+        sqlParams: [valueKey(w.value)],
+      };
     case "<":
-      return { sql: `${fieldExpr} < ?`, sqlParams: [toSqlValue(w.value)] };
     case "<=":
-      return { sql: `${fieldExpr} <= ?`, sqlParams: [toSqlValue(w.value)] };
     case ">":
-      return { sql: `${fieldExpr} > ?`, sqlParams: [toSqlValue(w.value)] };
-    case ">=":
-      return { sql: `${fieldExpr} >= ?`, sqlParams: [toSqlValue(w.value)] };
+    case ">=": {
+      // 範囲フィルタはオペランドと同じ型の値のみマッチする（型ブラケット）
+      const tag = valueTypeTag(w.value);
+      const bracket =
+        w.op === "<" || w.op === "<="
+          ? `${keyExpr} >= '${tag}'`
+          : `${keyExpr} < '${nextTypeTag(tag)}'`;
+      return {
+        sql: `(${keyExpr} ${w.op} ? AND ${bracket})`,
+        sqlParams: [valueKey(w.value)],
+      };
+    }
     case "array-contains":
       return {
-        sql: `EXISTS (SELECT 1 FROM json_each(${fieldExpr}) WHERE value = ?)`,
-        sqlParams: [toSqlValue(w.value)],
+        sql: `firestore_arr_contains(${jsonExpr}, ?) = 1`,
+        sqlParams: [valueKey(w.value)],
       };
     case "array-contains-any": {
       const values = w.value as unknown[];
-      const placeholders = values.map(() => "?").join(", ");
       return {
-        sql: `EXISTS (SELECT 1 FROM json_each(${fieldExpr}) WHERE value IN (${placeholders}))`,
-        sqlParams: values.map(toSqlValue),
+        sql: `firestore_arr_contains_any(${jsonExpr}, ?) = 1`,
+        sqlParams: [JSON.stringify(values.map(valueKey))],
       };
     }
     case "in": {
       const values = w.value as unknown[];
       const placeholders = values.map(() => "?").join(", ");
       return {
-        sql: `${fieldExpr} IN (${placeholders})`,
-        sqlParams: values.map(toSqlValue),
+        sql: `${keyExpr} IN (${placeholders})`,
+        sqlParams: values.map(valueKey),
       };
     }
     case "not-in": {
       const values = w.value as unknown[];
       const placeholders = values.map(() => "?").join(", ");
       return {
-        sql: `${fieldExpr} NOT IN (${placeholders})`,
-        sqlParams: values.map(toSqlValue),
+        sql: `(${keyExpr} IS NOT NULL AND ${keyExpr} <> '${TYPE_TAG.null}' AND ${keyExpr} NOT IN (${placeholders}))`,
+        sqlParams: values.map(valueKey),
       };
     }
     default:
-      throw new Error(`Unsupported operator: ${w.op}`);
+      throw new QueryValidationError(`Unsupported operator: ${w.op}`);
   }
 }
 
@@ -354,45 +455,68 @@ function buildCompositeClause(comp: SerializedCompositeFilterConstraint): {
   return { sql: `(${parts.join(joiner)})`, sqlParams: params };
 }
 
+/**
+ * カーソル制約を実効 orderBy に対する辞書式タプル比較として構築する
+ *
+ * 例: orderBy(a), orderBy(b) + startAfter(x, y) は
+ *   (a > x) OR (a = x AND b > y)
+ * になる（desc フィールドは比較方向が反転する）。
+ */
 function buildCursorClause(
   cursor: SerializedCursorConstraint,
-  orderBys: SerializedOrderByConstraint[],
-): { sql: string; sqlParams: unknown[] } {
-  // 単一フィールドカーソルのみサポート（Phase 1では十分）
-  const params: unknown[] = [];
-  const conditions: string[] = [];
+  orderKeys: OrderKey[],
+  collectionPath: string,
+): { sql: string; sqlParams: unknown[] } | null {
+  const n = Math.min(cursor.values.length, orderKeys.length);
+  if (n === 0) return null;
 
-  for (let i = 0; i < Math.min(cursor.values.length, orderBys.length); i++) {
-    const orderBy = orderBys[i];
-    const fieldExpr = `json_extract(data, '$.${escapePath(orderBy.fieldPath)}')`;
-    const value = toSqlValue(cursor.values[i]);
+  const isStart = cursor.type === "startAt" || cursor.type === "startAfter";
+  const inclusive = cursor.type === "startAt" || cursor.type === "endAt";
 
-    let op: string;
-    switch (cursor.type) {
-      case "startAt":
-        op = orderBy.direction === "asc" ? ">=" : "<=";
-        break;
-      case "startAfter":
-        op = orderBy.direction === "asc" ? ">" : "<";
-        break;
-      case "endAt":
-        op = orderBy.direction === "asc" ? "<=" : ">=";
-        break;
-      case "endBefore":
-        op = orderBy.direction === "asc" ? "<" : ">";
-        break;
+  // 各フィールドの比較値（__name__ はフルパスに正規化）
+  const exprs: string[] = [];
+  const cursorParams: unknown[] = [];
+  for (let i = 0; i < n; i++) {
+    const o = orderKeys[i];
+    exprs.push(o.expr);
+    if (o.isName) {
+      const raw = String(cursor.values[i]);
+      cursorParams.push(raw.includes("/") ? raw : `${collectionPath}/${raw}`);
+    } else {
+      cursorParams.push(valueKey(cursor.values[i]));
     }
-
-    conditions.push(`${fieldExpr} ${op} ?`);
-    params.push(value);
   }
 
-  return { sql: conditions.join(" AND "), sqlParams: params };
-}
+  const strictOp = (direction: "asc" | "desc"): string => {
+    const forward = direction === "asc" ? ">" : "<";
+    const backward = direction === "asc" ? "<" : ">";
+    return isStart ? forward : backward;
+  };
 
-function toSqlValue(value: unknown): unknown {
-  if (typeof value === "boolean") return value ? 1 : 0;
-  return value;
+  const terms: string[] = [];
+  const params: unknown[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const parts: string[] = [];
+    for (let j = 0; j < i; j++) {
+      parts.push(`${exprs[j]} = ?`);
+      params.push(cursorParams[j]);
+    }
+    parts.push(`${exprs[i]} ${strictOp(orderKeys[i].direction)} ?`);
+    params.push(cursorParams[i]);
+    terms.push(`(${parts.join(" AND ")})`);
+  }
+
+  if (inclusive) {
+    const parts: string[] = [];
+    for (let j = 0; j < n; j++) {
+      parts.push(`${exprs[j]} = ?`);
+      params.push(cursorParams[j]);
+    }
+    terms.push(`(${parts.join(" AND ")})`);
+  }
+
+  return { sql: `(${terms.join(" OR ")})`, sqlParams: params };
 }
 
 function escapePath(fieldPath: string): string {

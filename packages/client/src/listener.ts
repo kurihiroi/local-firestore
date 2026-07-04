@@ -8,6 +8,8 @@ import type {
 } from "@local-firestore/shared";
 import { type ConnectionManager, getConnectionManager } from "./connection.js";
 import type { Query } from "./query.js";
+import { validateConstraints } from "./query.js";
+import { deserializeData } from "./serialization.js";
 import { SnapshotCache } from "./snapshot-cache.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
@@ -102,7 +104,9 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
         // キャッシュに保存
         cache.putDocument(msg.path, msg.exists, msg.data, msg.createTime, msg.updateTime);
 
-        let data: DocumentData | null = msg.exists ? (msg.data as DocumentData) : null;
+        let data: DocumentData | null = msg.exists
+          ? deserializeData(msg.data as DocumentData, firestore)
+          : null;
         if (data && docCb.converter) {
           const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
             docCb.ref.path,
@@ -139,11 +143,12 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
 
         const docs = msg.docs.map((d) => {
           const docId = getDocIdFromPath(d.path);
+          const revived = deserializeData(d.data, fs);
           if (conv) {
             const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
               d.path,
               docId,
-              d.data,
+              revived,
               d.createTime,
               d.updateTime,
               fs,
@@ -158,12 +163,12 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
               fs,
             );
           }
-          return new QueryDocumentSnapshot(d.path, docId, d.data, d.createTime, d.updateTime, fs);
+          return new QueryDocumentSnapshot(d.path, docId, revived, d.createTime, d.updateTime, fs);
         });
         const changes: DocumentChange<DocumentData>[] = msg.changes.map(
           (ch: DocumentChangeData) => {
             const docId = getDocIdFromPath(ch.path);
-            const rawData = ch.data ?? {};
+            const rawData = deserializeData(ch.data ?? {}, fs);
             let docData: DocumentData = rawData;
             if (conv) {
               const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
@@ -256,6 +261,10 @@ export function onSnapshotQuery<T = DocumentData>(
   onNext: (snapshot: QuerySnapshot<T>) => void,
   onError?: (error: FirestoreError) => void,
 ): Unsubscribe {
+  if (queryOrRef.type === "query") {
+    validateConstraints(queryOrRef.constraints);
+  }
+
   const firestore = queryOrRef._firestore;
   const manager = getConnectionManager(firestore);
   ensureMessageHandler(manager, firestore);

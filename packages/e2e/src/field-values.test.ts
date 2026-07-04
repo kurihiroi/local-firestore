@@ -8,6 +8,7 @@ import {
   increment,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
 } from "@local-firestore/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -34,12 +35,10 @@ describe("E2E: Field value sentinels", () => {
     const data = snap.data() as Record<string, unknown>;
     expect(data.name).toBe("test");
 
-    const createdAt = data.createdAt as {
-      __type: string;
-      value: { seconds: number; nanoseconds: number };
-    };
-    expect(createdAt.__type).toBe("timestamp");
-    const tsMillis = createdAt.value.seconds * 1000 + createdAt.value.nanoseconds / 1e6;
+    // 本家 SDK と同様、読み取り時に Timestamp インスタンスへ復元される
+    const createdAt = data.createdAt as Timestamp;
+    expect(createdAt).toBeInstanceOf(Timestamp);
+    const tsMillis = createdAt.toMillis();
     expect(tsMillis).toBeGreaterThanOrEqual(before - 1000);
     expect(tsMillis).toBeLessThanOrEqual(after + 1000);
   });

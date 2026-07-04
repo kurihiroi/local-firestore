@@ -1,5 +1,6 @@
 import type { VectorDistanceMeasure } from "@local-firestore/shared";
 import Database from "better-sqlite3";
+import { arrayContainsKey, computeFirestoreKey } from "./firestore-key.js";
 import { initSchema } from "./schema.js";
 
 export function createDatabase(path: string = ":memory:"): Database.Database {
@@ -12,8 +13,51 @@ export function createDatabase(path: string = ":memory:"): Database.Database {
 
   initSchema(db);
   registerVectorFunctions(db);
+  registerFirestoreKeyFunctions(db);
 
   return db;
+}
+
+/**
+ * Firestore 互換の比較セマンティクス用ユーザー定義関数を登録する
+ *
+ * - firestore_key(json) -> string | null
+ *   JSON 値（`data -> '$.field'` の出力）を Firestore の値順序を保存するキーに変換する。
+ *   フィールド欠損（SQL NULL）の場合は NULL を返し、比較・ソート対象から除外される。
+ * - firestore_arr_contains(json, elementKey) -> 0 | 1
+ * - firestore_arr_contains_any(json, elementKeysJson) -> 0 | 1
+ */
+function registerFirestoreKeyFunctions(db: Database.Database): void {
+  db.function("firestore_key", { deterministic: true }, (json: unknown): string | null => {
+    if (json === null || json === undefined) return null;
+    return computeFirestoreKey(String(json));
+  });
+
+  db.function(
+    "firestore_arr_contains",
+    { deterministic: true },
+    (json: unknown, elementKey: unknown): number => {
+      if (typeof elementKey !== "string") return 0;
+      return arrayContainsKey(json === null ? null : String(json), elementKey) ? 1 : 0;
+    },
+  );
+
+  db.function(
+    "firestore_arr_contains_any",
+    { deterministic: true },
+    (json: unknown, elementKeysJson: unknown): number => {
+      if (typeof elementKeysJson !== "string") return 0;
+      let keys: unknown;
+      try {
+        keys = JSON.parse(elementKeysJson);
+      } catch {
+        return 0;
+      }
+      if (!Array.isArray(keys)) return 0;
+      const jsonStr = json === null || json === undefined ? null : String(json);
+      return keys.some((k) => typeof k === "string" && arrayContainsKey(jsonStr, k)) ? 1 : 0;
+    },
+  );
 }
 
 /** JSON文字列を数値ベクトルとしてパースする。無効な場合は null */

@@ -8,6 +8,7 @@ import type {
   WithFieldValue,
 } from "@local-firestore/shared";
 import { ERROR_CODES } from "@local-firestore/shared";
+import { deserializeData, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
@@ -71,11 +72,13 @@ export class Transaction {
       path: ref.path,
     });
 
-    if (res.exists && ref._converter) {
+    const data = res.exists ? deserializeData(res.data as DocumentData, this.firestore) : null;
+
+    if (data && ref._converter) {
       const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
         ref.path,
         ref.id,
-        res.data as DocumentData,
+        data,
         res.createTime ?? "",
         res.updateTime ?? "",
         ref._firestore,
@@ -84,12 +87,7 @@ export class Transaction {
       return new DocumentSnapshot<T>(ref, converted as T, res.createTime, res.updateTime);
     }
 
-    return new DocumentSnapshot<T>(
-      ref,
-      res.exists ? (res.data as T) : null,
-      res.createTime,
-      res.updateTime,
-    );
+    return new DocumentSnapshot<T>(ref, data as T | null, res.createTime, res.updateTime);
   }
 
   set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this {
@@ -97,7 +95,7 @@ export class Transaction {
     this.operations.push({
       type: "set",
       path: ref.path,
-      data: dbData as DocumentData,
+      data: serializeData(dbData as DocumentData),
     });
     return this;
   }
@@ -106,7 +104,7 @@ export class Transaction {
     this.operations.push({
       type: "update",
       path: ref.path,
-      data: data as DocumentData,
+      data: serializeData(data as DocumentData),
     });
     return this;
   }

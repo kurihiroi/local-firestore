@@ -5,6 +5,7 @@ import {
   getDocs,
   query,
   setDoc,
+  VectorValue,
   vector,
   where,
 } from "@local-firestore/client";
@@ -52,7 +53,7 @@ describe("E2E: ベクトル近傍検索 (findNearest)", () => {
     expect(snap.docs.map((d) => d.id)).toEqual(["red", "orange"]);
   });
 
-  it("VectorValueはシリアライズ形式で保存・取得できる", async () => {
+  it("VectorValueはインスタンスとして保存・取得できる", async () => {
     const items = collection(ctx.firestore, "vec-items");
     const q = findNearest(items, {
       vectorField: "embedding",
@@ -64,7 +65,9 @@ describe("E2E: ベクトル近傍検索 (findNearest)", () => {
     expect(snap.docs).toHaveLength(1);
     const data = snap.docs[0].data() as Record<string, unknown>;
     expect(data.name).toBe("blue");
-    expect(data.embedding).toEqual({ __type: "vector", values: [0, 0, 1] });
+    // 本家 SDK と同様、読み取り時に VectorValue インスタンスへ復元される
+    expect(data.embedding).toBeInstanceOf(VectorValue);
+    expect((data.embedding as VectorValue).toArray()).toEqual([0, 0, 1]);
   });
 
   it("whereフィルタとdistanceResultFieldを組み合わせられる", async () => {

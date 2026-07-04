@@ -53,7 +53,7 @@ describe("HttpTransport", () => {
     const result = await transport.get<{ data: string }>("/test");
 
     expect(result).toEqual({ data: "test" });
-    expect(fetch).toHaveBeenCalledWith("http://localhost:8080/test");
+    expect(fetch).toHaveBeenCalledWith("http://localhost:8080/test", { headers: {} });
 
     vi.unstubAllGlobals();
   });
@@ -117,6 +117,7 @@ describe("HttpTransport", () => {
     expect(result).toEqual({ success: true });
     expect(fetch).toHaveBeenCalledWith("http://localhost:8080/docs/users/alice", {
       method: "DELETE",
+      headers: {},
     });
 
     vi.unstubAllGlobals();
@@ -170,7 +171,9 @@ describe("HttpTransport basePath（マルチデータベース）", () => {
     const transport = new HttpTransport("localhost", 8080, false, "/databases/mydb");
     await transport.get("/docs/users/alice");
 
-    expect(fetch).toHaveBeenCalledWith("http://localhost:8080/databases/mydb/docs/users/alice");
+    expect(fetch).toHaveBeenCalledWith("http://localhost:8080/databases/mydb/docs/users/alice", {
+      headers: {},
+    });
 
     vi.unstubAllGlobals();
   });
@@ -179,5 +182,59 @@ describe("HttpTransport basePath（マルチデータベース）", () => {
     const transport = new HttpTransport("localhost", 8080, false, "/databases/mydb");
     expect(transport.getWebSocketUrl()).toBe("ws://localhost:8080");
     expect(transport.getBaseUrl()).toBe("http://localhost:8080/databases/mydb");
+  });
+});
+
+describe("HttpTransport 認証トークン", () => {
+  it("authTokenProvider のトークンが Authorization ヘッダーで送信される", async () => {
+    const mockResponse = { ok: true, json: () => Promise.resolve({}) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
+
+    const transport = new HttpTransport("localhost", 8080, false, "", () => "my-id-token");
+    await transport.get("/docs/users/alice");
+    await transport.post("/query", {});
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "http://localhost:8080/docs/users/alice", {
+      headers: { Authorization: "Bearer my-id-token" },
+    });
+    expect(fetch).toHaveBeenNthCalledWith(2, "http://localhost:8080/query", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer my-id-token",
+      },
+      body: JSON.stringify({}),
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("非同期の authTokenProvider も使用できる", async () => {
+    const mockResponse = { ok: true, json: () => Promise.resolve({}) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
+
+    const transport = new HttpTransport("localhost", 8080, false, "", async () => "async-token");
+    await transport.delete("/docs/users/alice");
+
+    expect(fetch).toHaveBeenCalledWith("http://localhost:8080/docs/users/alice", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer async-token" },
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("トークンが null の場合はヘッダーを付与しない", async () => {
+    const mockResponse = { ok: true, json: () => Promise.resolve({}) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
+
+    const transport = new HttpTransport("localhost", 8080, false, "", () => null);
+    await transport.get("/docs/users/alice");
+
+    expect(fetch).toHaveBeenCalledWith("http://localhost:8080/docs/users/alice", {
+      headers: {},
+    });
+
+    vi.unstubAllGlobals();
   });
 });

@@ -12,6 +12,7 @@ import type {
 import { logDebug } from "./logger.js";
 import { getWriteQueue, isNetworkEnabled } from "./network-state.js";
 import { doc } from "./references.js";
+import { deserializeData, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import type { CollectionReference, DocumentReference } from "./types.js";
 import { DocumentSnapshot, FieldPath } from "./types.js";
@@ -34,11 +35,13 @@ export async function getDoc<T = DocumentData>(
   const transport = reference._firestore._transport;
   const res = await transport.get<GetDocumentResponse>(`/docs/${reference.path}`);
 
-  if (res.exists && reference._converter) {
+  const data = res.exists ? deserializeData(res.data as DocumentData, reference._firestore) : null;
+
+  if (data && reference._converter) {
     const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
       reference.path,
       reference.id,
-      res.data as DocumentData,
+      data,
       res.createTime ?? "",
       res.updateTime ?? "",
       reference._firestore,
@@ -47,12 +50,7 @@ export async function getDoc<T = DocumentData>(
     return new DocumentSnapshot<T>(reference, converted as T, res.createTime, res.updateTime);
   }
 
-  return new DocumentSnapshot<T>(
-    reference,
-    res.exists ? (res.data as T) : null,
-    res.createTime,
-    res.updateTime,
-  );
+  return new DocumentSnapshot<T>(reference, data as T | null, res.createTime, res.updateTime);
 }
 
 /** ドキュメントを作成/上書きする */
@@ -71,11 +69,12 @@ export async function setDoc<T = DocumentData>(
   options?: SetOptions,
 ): Promise<void> {
   const transport = reference._firestore._transport;
-  const dbData = reference._converter
+  const converted = reference._converter
     ? options
       ? reference._converter.toFirestore(data as PartialWithFieldValue<T>, options)
       : reference._converter.toFirestore(data as WithFieldValue<T>)
     : data;
+  const dbData = serializeData(converted as DocumentData);
   if (!isNetworkEnabled(reference._firestore)) {
     logDebug(`Network disabled, queueing set for ${reference.path}`);
     getWriteQueue(reference._firestore).enqueue(
@@ -96,7 +95,8 @@ export async function addDoc<T = DocumentData>(
   data: WithFieldValue<T>,
 ): Promise<DocumentReference<T>> {
   const transport = reference._firestore._transport;
-  const dbData = reference._converter ? reference._converter.toFirestore(data) : data;
+  const converted = reference._converter ? reference._converter.toFirestore(data) : data;
+  const dbData = serializeData(converted as DocumentData);
   if (!isNetworkEnabled(reference._firestore)) {
     // オフライン時は ID をクライアント側で生成し、set としてキューする
     const documentId = generateAutoId();
@@ -130,7 +130,7 @@ export async function updateDoc<T = DocumentData>(
   ...moreFieldsAndValues: unknown[]
 ): Promise<void> {
   const transport = reference._firestore._transport;
-  let data: UpdateData<T>;
+  let raw: Record<string, unknown>;
 
   if (typeof dataOrField === "string" || dataOrField instanceof FieldPath) {
     // フィールドパス形式: updateDoc(ref, field, value, field2, value2, ...)
@@ -138,40 +138,31 @@ export async function updateDoc<T = DocumentData>(
     if (moreFieldsAndValues.length === 0) {
       throw new Error("updateDoc with field path requires a value argument");
     }
+    // ドット記法キーはそのまま送信し、サーバー側でリーフのみ更新する
+    // （ネスト展開すると親マップ全体の置換になり本家と挙動が変わるため）
     const obj: Record<string, unknown> = {};
-    setNestedValue(obj, fieldPath, moreFieldsAndValues[0]);
+    obj[fieldPath] = moreFieldsAndValues[0];
 
     // 残りのペアを処理
     for (let i = 1; i < moreFieldsAndValues.length; i += 2) {
       const key = moreFieldsAndValues[i];
       const val = moreFieldsAndValues[i + 1];
       const keyStr = key instanceof FieldPath ? key.toString() : String(key);
-      setNestedValue(obj, keyStr, val);
+      obj[keyStr] = val;
     }
-    data = obj as UpdateData<T>;
+    raw = obj;
   } else {
-    data = dataOrField;
+    raw = dataOrField as Record<string, unknown>;
   }
+
+  const data = serializeData(raw as DocumentData);
 
   if (!isNetworkEnabled(reference._firestore)) {
     logDebug(`Network disabled, queueing update for ${reference.path}`);
-    getWriteQueue(reference._firestore).enqueue("update", reference.path, data as DocumentData);
+    getWriteQueue(reference._firestore).enqueue("update", reference.path, data);
     return;
   }
   await transport.patch(`/docs/${reference.path}`, { data });
-}
-
-/** ドット記法のフィールドパスを使ってネストされたオブジェクトに値を設定する */
-function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
-  const segments = path.split(".");
-  let current: Record<string, unknown> = obj;
-  for (let i = 0; i < segments.length - 1; i++) {
-    if (!(segments[i] in current) || typeof current[segments[i]] !== "object") {
-      current[segments[i]] = {};
-    }
-    current = current[segments[i]] as Record<string, unknown>;
-  }
-  current[segments[segments.length - 1]] = value;
 }
 
 /** ドキュメントを削除する */
