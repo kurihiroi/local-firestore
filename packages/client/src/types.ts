@@ -8,8 +8,8 @@ import type { HttpTransport } from "./transport.js";
 /** Firestoreインスタンス */
 export interface Firestore {
   readonly type: "firestore";
-  /** @internal */
-  readonly _transport: HttpTransport;
+  /** @internal `connectFirestoreEmulator()` で差し替えられるため mutable */
+  _transport: HttpTransport;
   /** @internal データベースID（マルチデータベース対応） */
   readonly _databaseId?: string;
 }

@@ -176,6 +176,215 @@ describe("securityRulesMiddleware", () => {
     });
   });
 
+  describe("query / aggregate rules (list operation)", () => {
+    const engine = new SecurityRulesEngine(createAuthRequiredRules());
+
+    it("should deny unauthenticated POST /query", async () => {
+      const app = createTestAppWithRules(engine);
+      const res = await request(app, "POST", "/query", {
+        body: { collectionPath: "users", constraints: [] },
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.code).toBe("permission-denied");
+    });
+
+    it("should allow authenticated POST /query", async () => {
+      const app = createTestAppWithRules(engine);
+      await request(app, "PUT", "/docs/users/user1", {
+        body: { data: { name: "Alice" } },
+        headers: { Authorization: "Bearer user1" },
+      });
+      const res = await request(app, "POST", "/query", {
+        body: { collectionPath: "users", constraints: [] },
+        headers: { Authorization: "Bearer user1" },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.docs).toHaveLength(1);
+    });
+
+    it("should deny unauthenticated POST /aggregate", async () => {
+      const app = createTestAppWithRules(engine);
+      const res = await request(app, "POST", "/aggregate", {
+        body: {
+          collectionPath: "users",
+          constraints: [],
+          aggregateSpec: { total: { aggregateType: "count" } },
+        },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("should allow authenticated POST /aggregate", async () => {
+      const app = createTestAppWithRules(engine);
+      const res = await request(app, "POST", "/aggregate", {
+        body: {
+          collectionPath: "users",
+          constraints: [],
+          aggregateSpec: { total: { aggregateType: "count" } },
+        },
+        headers: { Authorization: "Bearer user1" },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("should evaluate list rule (not read shortcut) when defined", async () => {
+      const listOnlyEngine = new SecurityRulesEngine({
+        rules: {
+          items: { get: true, list: "request.auth != null", write: true },
+        },
+      });
+      const app = createTestAppWithRules(listOnlyEngine);
+
+      // get は許可されるが list（クエリ）は認証必須
+      await request(app, "PUT", "/docs/items/item1", { body: { data: { v: 1 } } });
+      const getRes = await request(app, "GET", "/docs/items/item1");
+      expect(getRes.status).toBe(200);
+
+      const queryDenied = await request(app, "POST", "/query", {
+        body: { collectionPath: "items", constraints: [] },
+      });
+      expect(queryDenied.status).toBe(403);
+
+      const queryAllowed = await request(app, "POST", "/query", {
+        body: { collectionPath: "items", constraints: [] },
+        headers: { Authorization: "Bearer user1" },
+      });
+      expect(queryAllowed.status).toBe(200);
+    });
+  });
+
+  describe("batch rules", () => {
+    const engine = new SecurityRulesEngine(createAuthRequiredRules());
+
+    it("should deny unauthenticated POST /batch", async () => {
+      const app = createTestAppWithRules(engine);
+      const res = await request(app, "POST", "/batch", {
+        body: { operations: [{ type: "set", path: "users/user1", data: { name: "Alice" } }] },
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.code).toBe("permission-denied");
+      expect(body.message).toContain("users/user1");
+    });
+
+    it("should allow authenticated POST /batch", async () => {
+      const app = createTestAppWithRules(engine);
+      const res = await request(app, "POST", "/batch", {
+        body: {
+          operations: [
+            { type: "set", path: "users/user1", data: { name: "Alice" } },
+            { type: "set", path: "users/user2", data: { name: "Bob" } },
+          ],
+        },
+        headers: { Authorization: "Bearer user1" },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("should deny batch when any operation is denied", async () => {
+      const mixedEngine = new SecurityRulesEngine({
+        rules: {
+          open: { read: true, write: true },
+          closed: { read: true, write: false },
+        },
+      });
+      const app = createTestAppWithRules(mixedEngine);
+      const res = await request(app, "POST", "/batch", {
+        body: {
+          operations: [
+            { type: "set", path: "open/doc1", data: { v: 1 } },
+            { type: "set", path: "closed/doc1", data: { v: 1 } },
+          ],
+        },
+      });
+      expect(res.status).toBe(403);
+
+      // 拒否されたバッチは一切書き込まれない（原子性）
+      const check = await request(app, "GET", "/docs/open/doc1");
+      const checkBody = await check.json();
+      expect(checkBody.exists).toBe(false);
+    });
+
+    it("should evaluate set as update when document exists", async () => {
+      const engine2 = new SecurityRulesEngine({
+        rules: {
+          items: { read: true, create: true, update: false, delete: true },
+        },
+      });
+      const app = createTestAppWithRules(engine2);
+
+      // 新規作成（create ルール適用）は成功
+      const createRes = await request(app, "POST", "/batch", {
+        body: { operations: [{ type: "set", path: "items/item1", data: { v: 1 } }] },
+      });
+      expect(createRes.status).toBe(200);
+
+      // 既存ドキュメントへの set（update ルール適用）は拒否
+      const updateRes = await request(app, "POST", "/batch", {
+        body: { operations: [{ type: "set", path: "items/item1", data: { v: 2 } }] },
+      });
+      expect(updateRes.status).toBe(403);
+    });
+  });
+
+  describe("transaction rules", () => {
+    const engine = new SecurityRulesEngine(createAuthRequiredRules());
+
+    it("should deny unauthenticated POST /transaction/get", async () => {
+      const app = createTestAppWithRules(engine);
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await beginRes.json();
+
+      const res = await request(app, "POST", "/transaction/get", {
+        body: { transactionId, path: "users/user1" },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("should allow authenticated POST /transaction/get", async () => {
+      const app = createTestAppWithRules(engine);
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await beginRes.json();
+
+      const res = await request(app, "POST", "/transaction/get", {
+        body: { transactionId, path: "users/user1" },
+        headers: { Authorization: "Bearer user1" },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("should deny unauthenticated POST /transaction/commit", async () => {
+      const app = createTestAppWithRules(engine);
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await beginRes.json();
+
+      const res = await request(app, "POST", "/transaction/commit", {
+        body: {
+          transactionId,
+          operations: [{ type: "set", path: "users/user1", data: { name: "Alice" } }],
+        },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("should allow authenticated POST /transaction/commit", async () => {
+      const app = createTestAppWithRules(engine);
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await beginRes.json();
+
+      const res = await request(app, "POST", "/transaction/commit", {
+        body: {
+          transactionId,
+          operations: [{ type: "set", path: "users/user1", data: { name: "Alice" } }],
+        },
+        headers: { Authorization: "Bearer user1" },
+      });
+      expect(res.status).toBe(200);
+    });
+  });
+
   describe("non-docs routes should not be affected", () => {
     const engine = new SecurityRulesEngine(createAuthRequiredRules());
 

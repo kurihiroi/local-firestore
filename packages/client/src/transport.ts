@@ -41,6 +41,23 @@ export class HttpTransport {
     return this.wsUrl;
   }
 
+  /**
+   * 認証トークンを取得する（未設定時は null）
+   *
+   * WebSocket の subscribe メッセージなど、HTTP ヘッダー以外で
+   * トークンを送信する経路で使用する。
+   */
+  async getAuthToken(): Promise<string | null> {
+    if (!this.authTokenProvider) return null;
+    const token = await this.authTokenProvider();
+    return token ?? null;
+  }
+
+  /** 設定済みの認証トークンプロバイダーを返す（インスタンス再構築用） */
+  getAuthTokenProvider(): AuthTokenProvider | undefined {
+    return this.authTokenProvider;
+  }
+
   getBaseUrl(): string {
     return this.baseUrl;
   }

@@ -20,9 +20,10 @@ import {
   startAt,
   where,
 } from "./query.js";
-import { collection } from "./references.js";
+import { collection, doc } from "./references.js";
+import { QueryDocumentSnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
-import { FieldPath } from "./types.js";
+import { DocumentSnapshot, FieldPath, Timestamp } from "./types.js";
 import { vector } from "./vector.js";
 
 describe("query()", () => {
@@ -266,5 +267,115 @@ describe("クエリ制約の型定義 (2-5)", () => {
     const q = query(usersRef, filter, composite, nonFilter, limitConstraint);
     expect(q.constraints).toHaveLength(4);
     expect(q.constraints.map((c) => c.type)).toEqual(["where", "or", "orderBy", "limit"]);
+  });
+});
+
+describe("スナップショットカーソル (startAt(snapshot) 形式)", () => {
+  const db = getFirestore();
+  const usersRef = collection(db, "users");
+  const iso = "2026-01-01T00:00:00.000Z";
+  const snap = new QueryDocumentSnapshot(
+    "users/alice",
+    "alice",
+    { age: 30, name: "Alice" },
+    iso,
+    iso,
+    db,
+  );
+
+  it("startAfter(snapshot) は orderBy フィールドの値 + __name__ へ展開される", () => {
+    const q = query(usersRef, orderBy("age"), startAfter(snap));
+    expect(q.constraints[1]).toEqual({
+      type: "startAfter",
+      values: [30, "users/alice"],
+    });
+  });
+
+  it("複数 orderBy のフィールド値が順番に展開される", () => {
+    const q = query(usersRef, orderBy("age"), orderBy("name", "desc"), startAt(snap));
+    expect(q.constraints[2]).toEqual({
+      type: "startAt",
+      values: [30, "Alice", "users/alice"],
+    });
+  });
+
+  it("orderBy なしの場合は __name__（ドキュメントパス）のみ", () => {
+    const q = query(usersRef, startAfter(snap));
+    expect(q.constraints[0]).toEqual({
+      type: "startAfter",
+      values: ["users/alice"],
+    });
+  });
+
+  it("orderBy('__name__') 明示時はパス値を重複させない", () => {
+    const q = query(usersRef, orderBy("__name__"), endAt(snap));
+    expect(q.constraints[1]).toEqual({
+      type: "endAt",
+      values: ["users/alice"],
+    });
+  });
+
+  it("endBefore(snapshot) も展開される", () => {
+    const q = query(usersRef, orderBy("age"), endBefore(snap));
+    expect(q.constraints[1]).toEqual({
+      type: "endBefore",
+      values: [30, "users/alice"],
+    });
+  });
+
+  it("ベースクエリの orderBy も使って展開される", () => {
+    const base = query(usersRef, orderBy("age"));
+    const q = query(base, startAfter(snap));
+    expect(q.constraints[1]).toEqual({
+      type: "startAfter",
+      values: [30, "users/alice"],
+    });
+  });
+
+  it("getDoc 結果の DocumentSnapshot も渡せる", () => {
+    const ref = doc(usersRef, "bob");
+    const docSnap = new DocumentSnapshot(ref, { age: 25 }, iso, iso);
+    const q = query(usersRef, orderBy("age"), startAfter(docSnap));
+    expect(q.constraints[1]).toEqual({
+      type: "startAfter",
+      values: [25, "users/bob"],
+    });
+  });
+
+  it("orderBy フィールドがスナップショットに存在しない場合はエラー", () => {
+    expect(() => query(usersRef, orderBy("missing"), startAfter(snap))).toThrowError(
+      FirestoreError,
+    );
+  });
+
+  it("存在しないドキュメントのスナップショットはエラー", () => {
+    const ref = doc(usersRef, "ghost");
+    const missing = new DocumentSnapshot(ref, null, null, null);
+    expect(() => startAfter(missing)).toThrowError(FirestoreError);
+  });
+
+  it("Timestamp などの特殊型はシリアライズされて展開される", () => {
+    const ts = new Timestamp(1700000000, 0);
+    const tsSnap = new QueryDocumentSnapshot(
+      "users/carol",
+      "carol",
+      { createdAt: ts },
+      iso,
+      iso,
+      db,
+    );
+    const q = query(usersRef, orderBy("createdAt"), startAfter(tsSnap));
+    expect(q.constraints[1]).toEqual({
+      type: "startAfter",
+      values: [
+        { __type: "timestamp", value: { seconds: 1700000000, nanoseconds: 0 } },
+        "users/carol",
+      ],
+    });
+  });
+
+  it("フィールド値の列挙による従来形式も引き続き動作する", () => {
+    const q = query(usersRef, orderBy("age"), startAfter(30));
+    expect(q.constraints[1]).toEqual({ type: "startAfter", values: [30] });
   });
 });

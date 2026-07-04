@@ -1,8 +1,8 @@
-import { getConnectionManager } from "./connection.js";
+import { getConnectionManager, hasConnectionManager } from "./connection.js";
 import { logDebug } from "./logger.js";
 import { getWriteQueue, setNetworkEnabled } from "./network-state.js";
 import type { AuthTokenProvider } from "./transport.js";
-import { HttpTransport } from "./transport.js";
+import { FirestoreError, HttpTransport } from "./transport.js";
 import type { Firestore } from "./types.js";
 
 export type { LogLevel } from "./logger.js";
@@ -41,35 +41,78 @@ const DEFAULT_SETTINGS = {
 /** デフォルトデータベースのID */
 const DEFAULT_DATABASE_ID = "(default)";
 
-export function getFirestore(settings?: FirestoreSettings, databaseId?: string): Firestore;
-export function getFirestore(_app: unknown, databaseId?: string): Firestore;
-export function getFirestore(
-  settingsOrApp?: FirestoreSettings | unknown,
-  databaseId?: string,
-): Firestore {
-  let settings: FirestoreSettings | undefined;
+/** FirebaseApp ごとの Firestore インスタンスキャッシュ（databaseId 別） */
+const appFirestoreInstances = new WeakMap<object, Map<string, Firestore>>();
 
-  // 第1引数が FirestoreSettings かどうかを判定
-  if (
-    settingsOrApp === undefined ||
-    settingsOrApp === null ||
-    (typeof settingsOrApp === "object" &&
-      ("host" in (settingsOrApp as Record<string, unknown>) ||
-        "port" in (settingsOrApp as Record<string, unknown>) ||
-        "ssl" in (settingsOrApp as Record<string, unknown>) ||
-        "authTokenProvider" in (settingsOrApp as Record<string, unknown>)))
-  ) {
-    settings = settingsOrApp as FirestoreSettings | undefined;
+/** 値が FirestoreSettings かどうか判定する */
+function isFirestoreSettings(value: unknown): value is FirestoreSettings {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return "host" in obj || "port" in obj || "ssl" in obj || "authTokenProvider" in obj;
+}
+
+/**
+ * 値が FirebaseApp かどうか判定する
+ *
+ * `firebase/app` の `FirebaseApp` は `name` / `options` プロパティを持つ。
+ */
+function isFirebaseApp(value: unknown): value is object {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return typeof obj.name === "string" && typeof obj.options === "object" && obj.options !== null;
+}
+
+/**
+ * FirebaseApp から認証トークンを自動取得するプロバイダーを作成する
+ *
+ * `firebase/auth`（optional peer dependency）を遅延ロードし、
+ * `getAuth(app).currentUser.getIdToken()` をリクエストごとに呼び出す。
+ * `firebase` パッケージ未インストール時やサインイン前は null を返す。
+ */
+function createFirebaseAppTokenProvider(app: object): AuthTokenProvider {
+  interface FirebaseAuthModule {
+    getAuth: (app: object) => {
+      currentUser: { getIdToken: () => Promise<string> } | null;
+    };
   }
-  // それ以外は app オブジェクト（無視）
 
+  let authModulePromise: Promise<FirebaseAuthModule | null> | null = null;
+  const loadAuthModule = (): Promise<FirebaseAuthModule | null> => {
+    if (!authModulePromise) {
+      // バンドラーに事前解決させないため、モジュール指定子は変数経由で渡す
+      const specifier = "firebase/auth";
+      authModulePromise = (import(/* @vite-ignore */ specifier) as Promise<unknown>).then(
+        (mod) => mod as FirebaseAuthModule,
+        () => {
+          logDebug("firebase/auth is not installed; auth token will not be sent");
+          return null;
+        },
+      );
+    }
+    return authModulePromise;
+  };
+
+  return async () => {
+    const mod = await loadAuthModule();
+    if (!mod) return null;
+    try {
+      const auth = mod.getAuth(app);
+      return (await auth.currentUser?.getIdToken()) ?? null;
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** 設定から Firestore インスタンスを構築する */
+function createFirestoreInstance(
+  settings: FirestoreSettings | undefined,
+  databaseId: string,
+): Firestore {
   const config = { ...DEFAULT_SETTINGS, ...settings };
-  const resolvedDatabaseId = databaseId ?? DEFAULT_DATABASE_ID;
   // デフォルト以外のデータベースは /databases/:databaseId プレフィックス経由でアクセスする
   const basePath =
-    resolvedDatabaseId === DEFAULT_DATABASE_ID
-      ? ""
-      : `/databases/${encodeURIComponent(resolvedDatabaseId)}`;
+    databaseId === DEFAULT_DATABASE_ID ? "" : `/databases/${encodeURIComponent(databaseId)}`;
   const transport = new HttpTransport(
     config.host,
     config.port,
@@ -80,8 +123,112 @@ export function getFirestore(
   return {
     type: "firestore",
     _transport: transport,
-    _databaseId: resolvedDatabaseId,
+    _databaseId: databaseId,
   } as Firestore;
+}
+
+export function getFirestore(settings?: FirestoreSettings, databaseId?: string): Firestore;
+export function getFirestore(app: unknown, databaseId?: string): Firestore;
+export function getFirestore(
+  settingsOrApp?: FirestoreSettings | unknown,
+  databaseId?: string,
+): Firestore {
+  const resolvedDatabaseId = databaseId ?? DEFAULT_DATABASE_ID;
+
+  // FirebaseApp が渡された場合: インスタンスをキャッシュし、
+  // firebase/auth の ID トークンを自動的に authTokenProvider として配線する
+  if (isFirebaseApp(settingsOrApp) && !isFirestoreSettings(settingsOrApp)) {
+    let instances = appFirestoreInstances.get(settingsOrApp);
+    if (!instances) {
+      instances = new Map();
+      appFirestoreInstances.set(settingsOrApp, instances);
+    }
+    let instance = instances.get(resolvedDatabaseId);
+    if (!instance) {
+      instance = createFirestoreInstance(
+        { authTokenProvider: createFirebaseAppTokenProvider(settingsOrApp) },
+        resolvedDatabaseId,
+      );
+      instances.set(resolvedDatabaseId, instance);
+    }
+    return instance;
+  }
+
+  const settings =
+    settingsOrApp === undefined || settingsOrApp === null || isFirestoreSettings(settingsOrApp)
+      ? (settingsOrApp as FirestoreSettings | undefined)
+      : undefined;
+
+  return createFirestoreInstance(settings, resolvedDatabaseId);
+}
+
+/**
+ * Firebase Auth Emulator 互換の mockUserToken
+ *
+ * 文字列の場合はそのままトークンとして送信される。
+ * オブジェクトの場合は `sub`（または `user_id`）を uid とし、
+ * LocalAuthProvider が解釈する `<uid>:<claims JSON>` 形式に変換される。
+ */
+export type EmulatorMockTokenOptions =
+  | string
+  | ({ sub?: string; user_id?: string } & Record<string, unknown>);
+
+/** connectFirestoreEmulator のオプション */
+export interface ConnectFirestoreEmulatorOptions {
+  mockUserToken?: EmulatorMockTokenOptions;
+}
+
+/**
+ * connectFirestoreEmulator - Firebase互換のエミュレータ接続関数
+ *
+ * 本家 SDK から移行したコードがそのまま動くための互換シム。
+ * `getFirestore(app)` で作成したインスタンスの接続先を local-firestore
+ * サーバーのホスト/ポートへ差し替える。
+ *
+ * 本家と同様、Firestore の使用開始後（リスナー登録後など）に呼び出すとエラーになる。
+ */
+export function connectFirestoreEmulator(
+  firestore: Firestore,
+  host: string,
+  port: number,
+  options?: ConnectFirestoreEmulatorOptions,
+): void {
+  if (hasConnectionManager(firestore)) {
+    throw new FirestoreError(
+      "failed-precondition",
+      "Firestore has already been started and its settings can no longer be changed. " +
+        "connectFirestoreEmulator() must be called before any other Firestore operation.",
+    );
+  }
+
+  const databaseId = firestore._databaseId ?? DEFAULT_DATABASE_ID;
+  const basePath =
+    databaseId === DEFAULT_DATABASE_ID ? "" : `/databases/${encodeURIComponent(databaseId)}`;
+
+  let authTokenProvider = firestore._transport.getAuthTokenProvider();
+  const mockUserToken = options?.mockUserToken;
+  if (mockUserToken !== undefined) {
+    const token =
+      typeof mockUserToken === "string" ? mockUserToken : buildMockUserToken(mockUserToken);
+    authTokenProvider = () => token;
+  }
+
+  firestore._transport = new HttpTransport(host, port, false, basePath, authTokenProvider);
+  logDebug(`Connected to Firestore emulator at ${host}:${port}`);
+}
+
+/** オブジェクト形式の mockUserToken を LocalAuthProvider が解釈できる形式へ変換する */
+function buildMockUserToken(
+  token: { sub?: string; user_id?: string } & Record<string, unknown>,
+): string {
+  const uid = token.sub ?? token.user_id;
+  if (!uid) {
+    throw new FirestoreError(
+      "invalid-argument",
+      "mockUserToken must contain 'sub' or 'user_id' field",
+    );
+  }
+  return `${uid}:${JSON.stringify(token)}`;
 }
 
 /**

@@ -191,6 +191,8 @@ export interface SubscribeDocMessage {
   path: string;
   /** 対象データベースID（省略時はデフォルトデータベース） */
   databaseId?: string;
+  /** 認証トークン（セキュリティルール評価用。`Authorization: Bearer` と同じ形式） */
+  authToken?: string;
 }
 
 /** クライアント → サーバー: クエリリスナー登録 */
@@ -202,6 +204,8 @@ export interface SubscribeQueryMessage {
   constraints: SerializedQueryConstraint[];
   /** 対象データベースID（省略時はデフォルトデータベース） */
   databaseId?: string;
+  /** 認証トークン（セキュリティルール評価用。`Authorization: Bearer` と同じ形式） */
+  authToken?: string;
 }
 
 /** クライアント → サーバー: リスナー解除 */

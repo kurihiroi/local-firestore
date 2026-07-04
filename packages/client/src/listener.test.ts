@@ -24,8 +24,19 @@ function createMockManager() {
 function createMockFirestore(): Firestore {
   return {
     type: "firestore",
-    _transport: { getWebSocketUrl: () => "ws://localhost:8080" },
-  } as Firestore;
+    _transport: {
+      getWebSocketUrl: () => "ws://localhost:8080",
+      getAuthToken: () => Promise.resolve(null),
+    },
+  } as unknown as Firestore;
+}
+
+/** registerSubscription に渡されたメッセージ（文字列 or ファクトリ）を解決して JSON パースする */
+async function parseRegisteredMessage(
+  message: string | (() => string | Promise<string>),
+): Promise<Record<string, unknown>> {
+  const resolved = typeof message === "function" ? await message() : message;
+  return JSON.parse(resolved) as Record<string, unknown>;
 }
 
 function createMockDocRef(firestore: Firestore, path: string): DocumentReference {
@@ -85,7 +96,7 @@ describe("onSnapshotDoc()", () => {
 });
 
 describe("onSnapshotQuery()", () => {
-  it("クエリのサブスクリプションを登録する", () => {
+  it("クエリのサブスクリプションを登録する", async () => {
     const manager = createMockManager();
     vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
       manager as unknown as connectionModule.ConnectionManager,
@@ -102,7 +113,7 @@ describe("onSnapshotQuery()", () => {
 
     // 登録メッセージにsubscribe_queryタイプが含まれることを確認
     const registeredMessage = manager.registerSubscription.mock.calls[0][1];
-    const parsed = JSON.parse(registeredMessage);
+    const parsed = await parseRegisteredMessage(registeredMessage);
     expect(parsed.type).toBe("subscribe_query");
     expect(parsed.collectionPath).toBe("users");
 
@@ -112,7 +123,7 @@ describe("onSnapshotQuery()", () => {
     vi.restoreAllMocks();
   });
 
-  it("Query型のターゲットに対してsubscribe_queryを送信する", () => {
+  it("Query型のターゲットに対してsubscribe_queryを送信する", async () => {
     const manager = createMockManager();
     vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
       manager as unknown as connectionModule.ConnectionManager,
@@ -133,7 +144,7 @@ describe("onSnapshotQuery()", () => {
     const unsubscribe = onSnapshotQuery(mockQuery as never, onNext);
 
     const registeredMessage = manager.registerSubscription.mock.calls[0][1];
-    const parsed = JSON.parse(registeredMessage);
+    const parsed = await parseRegisteredMessage(registeredMessage);
     expect(parsed.type).toBe("subscribe_query");
     expect(parsed.collectionPath).toBe("users");
     expect(parsed.collectionGroup).toBe(false);
@@ -145,7 +156,7 @@ describe("onSnapshotQuery()", () => {
 });
 
 describe("onSnapshot()", () => {
-  it("DocumentReferenceの場合ドキュメントリスナーを設定する", () => {
+  it("DocumentReferenceの場合ドキュメントリスナーを設定する", async () => {
     const manager = createMockManager();
     vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
       manager as unknown as connectionModule.ConnectionManager,
@@ -158,7 +169,7 @@ describe("onSnapshot()", () => {
     const unsubscribe = onSnapshot(ref, onNext);
 
     const registeredMessage = manager.registerSubscription.mock.calls[0][1];
-    const parsed = JSON.parse(registeredMessage);
+    const parsed = await parseRegisteredMessage(registeredMessage);
     expect(parsed.type).toBe("subscribe_doc");
     expect(parsed.path).toBe("users/alice");
 
@@ -166,7 +177,7 @@ describe("onSnapshot()", () => {
     vi.restoreAllMocks();
   });
 
-  it("CollectionReferenceの場合クエリリスナーを設定する", () => {
+  it("CollectionReferenceの場合クエリリスナーを設定する", async () => {
     const manager = createMockManager();
     vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
       manager as unknown as connectionModule.ConnectionManager,
@@ -179,7 +190,7 @@ describe("onSnapshot()", () => {
     const unsubscribe = onSnapshot(collRef, onNext);
 
     const registeredMessage = manager.registerSubscription.mock.calls[0][1];
-    const parsed = JSON.parse(registeredMessage);
+    const parsed = await parseRegisteredMessage(registeredMessage);
     expect(parsed.type).toBe("subscribe_query");
 
     unsubscribe();
@@ -225,7 +236,7 @@ describe("onSnapshot()", () => {
 });
 
 describe("onSnapshot() with SnapshotListenOptions", () => {
-  it("オプション + コールバック形式で呼び出せる（オプションは no-op）", () => {
+  it("オプション + コールバック形式で呼び出せる（オプションは no-op）", async () => {
     const manager = createMockManager();
     vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
       manager as unknown as connectionModule.ConnectionManager,
@@ -238,7 +249,7 @@ describe("onSnapshot() with SnapshotListenOptions", () => {
     const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, onNext);
 
     const [subscriptionId, message] = manager.registerSubscription.mock.calls[0];
-    expect(JSON.parse(message).type).toBe("subscribe_doc");
+    expect((await parseRegisteredMessage(message)).type).toBe("subscribe_doc");
 
     // スナップショット配信で onNext が呼ばれる（オプションで握りつぶされない）
     const handler = manager.setMessageHandler.mock.calls[0][0];
@@ -285,7 +296,7 @@ describe("onSnapshot() with SnapshotListenOptions", () => {
     vi.restoreAllMocks();
   });
 
-  it("オプション + Observer 形式で呼び出せる", () => {
+  it("オプション + Observer 形式で呼び出せる", async () => {
     const manager = createMockManager();
     vi.spyOn(connectionModule, "getConnectionManager").mockReturnValue(
       manager as unknown as connectionModule.ConnectionManager,
@@ -298,7 +309,7 @@ describe("onSnapshot() with SnapshotListenOptions", () => {
     const unsubscribe = onSnapshot(collRef, { includeMetadataChanges: false }, { next });
 
     const [subscriptionId, message] = manager.registerSubscription.mock.calls[0];
-    expect(JSON.parse(message).type).toBe("subscribe_query");
+    expect((await parseRegisteredMessage(message)).type).toBe("subscribe_query");
 
     const handler = manager.setMessageHandler.mock.calls[0][0];
     handler({

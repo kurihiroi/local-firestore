@@ -13,7 +13,7 @@ import { deserializeData, serializeValue } from "./serialization.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
 import type { CollectionReference, Firestore } from "./types.js";
-import { FieldPath } from "./types.js";
+import { DocumentSnapshot, FieldPath } from "./types.js";
 import { VectorValue } from "./vector.js";
 
 // ============================================================
@@ -41,6 +41,84 @@ export interface Query<T = DocumentData> {
 
 export interface QueryConstraint {
   readonly _serialized: SerializedQueryConstraint;
+  /**
+   * @internal スナップショットカーソル（`startAt(snapshot)` 形式）の場合に設定される。
+   * `query()` でクエリに組み込まれる際、orderBy フィールドの値 + `__name__`
+   * （ドキュメントパス）へ展開される。
+   */
+  readonly _cursorSnapshot?: SnapshotCursorSource;
+}
+
+/** スナップショットカーソルとして渡せるスナップショット型 */
+type SnapshotCursorSource = DocumentSnapshot<unknown> | QueryDocumentSnapshot<unknown>;
+
+/** カーソル制約の種別 */
+type CursorConstraintType = "startAt" | "startAfter" | "endAt" | "endBefore";
+
+/** 値がドキュメントスナップショットかどうか判定する */
+function isSnapshotCursorSource(value: unknown): value is SnapshotCursorSource {
+  return value instanceof DocumentSnapshot || value instanceof QueryDocumentSnapshot;
+}
+
+/** カーソル制約を作成する（スナップショット形式は解決を query() まで遅延する） */
+function cursorConstraint(type: CursorConstraintType, values: unknown[]): QueryConstraint {
+  if (values.length === 1 && isSnapshotCursorSource(values[0])) {
+    const snapshot = values[0];
+    if (!snapshot.exists()) {
+      throw new FirestoreError(
+        "invalid-argument",
+        `Invalid query. You are trying to start or end a query using a document that doesn't exist.`,
+      );
+    }
+    return {
+      _serialized: { type, values: [] },
+      _cursorSnapshot: snapshot,
+    };
+  }
+  return {
+    _serialized: { type, values: values.map(serializeValue) },
+  };
+}
+
+/**
+ * スナップショットカーソルを orderBy フィールドの値へ展開する
+ *
+ * 本家 SDK と同様に、クエリの orderBy フィールドの値をスナップショットから抽出し、
+ * 末尾に `__name__`（ドキュメントパス）のタイブレーク値を付与する。
+ * サーバー側は暗黙の `__name__` orderBy を補うため、orderBy 数 + 1 個の値を送れる。
+ */
+function resolveSnapshotCursor(
+  type: CursorConstraintType,
+  snapshot: SnapshotCursorSource,
+  precedingConstraints: SerializedQueryConstraint[],
+): SerializedQueryConstraint {
+  const orderBys = precedingConstraints.filter((c) => c.type === "orderBy");
+  const docPath = snapshot.ref.path;
+
+  const values: unknown[] = [];
+  let hasNameOrderBy = false;
+  for (const o of orderBys) {
+    if (o.fieldPath === "__name__") {
+      values.push(docPath);
+      hasNameOrderBy = true;
+      continue;
+    }
+    const value = snapshot.get(o.fieldPath);
+    if (value === undefined) {
+      throw new FirestoreError(
+        "invalid-argument",
+        `Invalid query. You are trying to start or end a query using a document for which the field '${o.fieldPath}' (used as the orderBy) does not exist.`,
+      );
+    }
+    values.push(serializeValue(value));
+  }
+
+  // 暗黙の __name__ タイブレーク（同値ドキュメントを正しくスキップするために必須）
+  if (!hasNameOrderBy) {
+    values.push(docPath);
+  }
+
+  return { type, values };
 }
 
 /** クエリ制約の種別リテラル型 */
@@ -100,10 +178,26 @@ export function query<T = DocumentData>(
           constraints: [...ref.constraints],
         };
 
+  // スナップショットカーソルは、ここまでに指定された orderBy を使って値へ展開する
+  const merged: SerializedQueryConstraint[] = [...base.constraints];
+  for (const c of constraints) {
+    if (c._cursorSnapshot) {
+      merged.push(
+        resolveSnapshotCursor(
+          c._serialized.type as CursorConstraintType,
+          c._cursorSnapshot,
+          merged,
+        ),
+      );
+    } else {
+      merged.push(c._serialized);
+    }
+  }
+
   return createQuery<T>(
     base.collectionPath,
     base.collectionGroup,
-    [...base.constraints, ...constraints.map((c) => c._serialized)],
+    merged,
     ref._firestore,
     ref._converter,
   );
@@ -155,32 +249,30 @@ export function limitToLast(n: number): QueryConstraint {
   };
 }
 
-/** startAtカーソル制約を作成する */
+/**
+ * startAtカーソル制約を作成する
+ *
+ * フィールド値の列挙、または `DocumentSnapshot` を渡せる（本家互換）。
+ * スナップショットを渡した場合、orderBy フィールドの値とドキュメントパスが
+ * カーソル値として使われる。
+ */
 export function startAt(...values: unknown[]): QueryConstraint {
-  return {
-    _serialized: { type: "startAt", values: values.map(serializeValue) },
-  };
+  return cursorConstraint("startAt", values);
 }
 
-/** startAfterカーソル制約を作成する */
+/** startAfterカーソル制約を作成する（フィールド値または DocumentSnapshot） */
 export function startAfter(...values: unknown[]): QueryConstraint {
-  return {
-    _serialized: { type: "startAfter", values: values.map(serializeValue) },
-  };
+  return cursorConstraint("startAfter", values);
 }
 
-/** endAtカーソル制約を作成する */
+/** endAtカーソル制約を作成する（フィールド値または DocumentSnapshot） */
 export function endAt(...values: unknown[]): QueryConstraint {
-  return {
-    _serialized: { type: "endAt", values: values.map(serializeValue) },
-  };
+  return cursorConstraint("endAt", values);
 }
 
-/** endBeforeカーソル制約を作成する */
+/** endBeforeカーソル制約を作成する（フィールド値または DocumentSnapshot） */
 export function endBefore(...values: unknown[]): QueryConstraint {
-  return {
-    _serialized: { type: "endBefore", values: values.map(serializeValue) },
-  };
+  return cursorConstraint("endBefore", values);
 }
 
 /** AND複合フィルタを作成する */

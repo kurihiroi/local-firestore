@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getConnectionManager } from "./connection.js";
 import { addDoc, deleteDoc, setDoc, updateDoc } from "./crud.js";
-import { disableNetwork, enableNetwork, getFirestore, waitForPendingWrites } from "./firestore.js";
+import {
+  connectFirestoreEmulator,
+  disableNetwork,
+  enableNetwork,
+  getFirestore,
+  waitForPendingWrites,
+} from "./firestore.js";
 import { getWriteQueue, isNetworkEnabled } from "./network-state.js";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 
@@ -204,5 +211,81 @@ describe("getFirestore() のマルチデータベース対応", () => {
     const db = getFirestore(undefined, "(default)");
     expect(db._databaseId).toBe("(default)");
     expect(db._transport.getBaseUrl()).toBe("http://localhost:8080");
+  });
+});
+
+describe("getFirestore(FirebaseApp)", () => {
+  const fakeApp = { name: "[DEFAULT]", options: { projectId: "demo" } };
+
+  it("FirebaseApp を渡すと同一インスタンスが返る（本家互換）", () => {
+    const db1 = getFirestore(fakeApp);
+    const db2 = getFirestore(fakeApp);
+    expect(db1).toBe(db2);
+  });
+
+  it("databaseId ごとに別インスタンスがキャッシュされる", () => {
+    const db1 = getFirestore(fakeApp);
+    const db2 = getFirestore(fakeApp, "other-db");
+    expect(db1).not.toBe(db2);
+    expect(getFirestore(fakeApp, "other-db")).toBe(db2);
+  });
+
+  it("FirebaseApp インスタンスには authTokenProvider が自動配線される", () => {
+    const db = getFirestore(fakeApp);
+    // firebase/auth 未インストール環境ではトークンは null になる（エラーにならない）
+    expect(db._transport.getAuthTokenProvider()).toBeDefined();
+  });
+
+  it("FirestoreSettings は従来どおり毎回新しいインスタンスを返す", () => {
+    const db1 = getFirestore({ host: "localhost", port: 8080 });
+    const db2 = getFirestore({ host: "localhost", port: 8080 });
+    expect(db1).not.toBe(db2);
+  });
+});
+
+describe("connectFirestoreEmulator()", () => {
+  it("接続先ホスト/ポートを差し替える", () => {
+    const db = getFirestore({ name: "app", options: {} });
+    connectFirestoreEmulator(db, "127.0.0.1", 9099);
+    expect(db._transport.getBaseUrl()).toBe("http://127.0.0.1:9099");
+  });
+
+  it("databaseId のプレフィックスを維持する", () => {
+    const db = getFirestore({ host: "localhost", port: 8080 }, "my-db");
+    connectFirestoreEmulator(db, "127.0.0.1", 9099);
+    expect(db._transport.getBaseUrl()).toBe("http://127.0.0.1:9099/databases/my-db");
+  });
+
+  it("既存の authTokenProvider を引き継ぐ", async () => {
+    const db = getFirestore({
+      host: "localhost",
+      port: 8080,
+      authTokenProvider: () => "token-1",
+    });
+    connectFirestoreEmulator(db, "127.0.0.1", 9099);
+    expect(await db._transport.getAuthToken()).toBe("token-1");
+  });
+
+  it("mockUserToken (文字列) をトークンとして送信する", async () => {
+    const db = getFirestore({ host: "localhost", port: 8080 });
+    connectFirestoreEmulator(db, "127.0.0.1", 9099, { mockUserToken: "raw-token" });
+    expect(await db._transport.getAuthToken()).toBe("raw-token");
+  });
+
+  it("mockUserToken (オブジェクト) は uid:claims 形式へ変換される", async () => {
+    const db = getFirestore({ host: "localhost", port: 8080 });
+    connectFirestoreEmulator(db, "127.0.0.1", 9099, {
+      mockUserToken: { sub: "alice", admin: true },
+    });
+    const token = await db._transport.getAuthToken();
+    expect(token).toBe(`alice:${JSON.stringify({ sub: "alice", admin: true })}`);
+  });
+
+  it("使用開始後に呼び出すとエラーになる", () => {
+    const db = getFirestore({ host: "localhost", port: 8080 });
+    getConnectionManager(db); // リスナー登録などで接続が開始された状態を再現
+    expect(() => connectFirestoreEmulator(db, "127.0.0.1", 9099)).toThrowError(
+      /already been started/,
+    );
   });
 });
