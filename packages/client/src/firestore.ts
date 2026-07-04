@@ -1,17 +1,17 @@
 import { getConnectionManager } from "./connection.js";
+import { logDebug } from "./logger.js";
+import { getWriteQueue, setNetworkEnabled } from "./network-state.js";
 import { HttpTransport } from "./transport.js";
 import type { Firestore } from "./types.js";
+
+export type { LogLevel } from "./logger.js";
+export { getLogLevel, setLogLevel } from "./logger.js";
 
 export interface FirestoreSettings {
   host?: string;
   port?: number;
   ssl?: boolean;
 }
-
-/** ログレベル */
-export type LogLevel = "debug" | "error" | "silent";
-
-let currentLogLevel: LogLevel = "error";
 
 const DEFAULT_SETTINGS: Required<FirestoreSettings> = {
   host: "localhost",
@@ -66,32 +66,31 @@ export function terminate(firestore: Firestore): Promise<void> {
   return Promise.resolve();
 }
 
-/** ネットワーク接続を無効化する */
+/**
+ * ネットワーク接続を無効化する
+ *
+ * 無効化中の書き込みは WriteQueue にエンキューされ、
+ * `enableNetwork()` 呼び出し時にまとめてサーバーへ送信される。
+ */
 export function disableNetwork(firestore: Firestore): Promise<void> {
+  setNetworkEnabled(firestore, false);
   const manager = getConnectionManager(firestore);
   manager.disconnect();
+  logDebug("Network disabled");
   return Promise.resolve();
 }
 
-/** ネットワーク接続を有効化する */
-export function enableNetwork(firestore: Firestore): Promise<void> {
+/** ネットワーク接続を有効化し、キュー済みの書き込みをフラッシュする */
+export async function enableNetwork(firestore: Firestore): Promise<void> {
+  setNetworkEnabled(firestore, true);
   const manager = getConnectionManager(firestore);
   manager.connect();
-  return Promise.resolve();
+  const queue = getWriteQueue(firestore);
+  logDebug(`Network enabled, flushing ${queue.size} queued write(s)`);
+  await queue.flush();
 }
 
-/** 保留中の書き込みの完了を待機する */
-export function waitForPendingWrites(_firestore: Firestore): Promise<void> {
-  // ローカルエミュレータでは書き込みは即座に完了するため、常に即 resolve
-  return Promise.resolve();
-}
-
-/** ログレベルを設定する */
-export function setLogLevel(level: LogLevel): void {
-  currentLogLevel = level;
-}
-
-/** @internal 現在のログレベルを取得する */
-export function getLogLevel(): LogLevel {
-  return currentLogLevel;
+/** 保留中の書き込みがすべてサーバーに送信されるまで待機する */
+export function waitForPendingWrites(firestore: Firestore): Promise<void> {
+  return getWriteQueue(firestore).waitForDrain();
 }

@@ -1,4 +1,5 @@
 import type { DocumentData, SetOptions } from "@local-firestore/shared";
+import { logError } from "./logger.js";
 import type { HttpTransport } from "./transport.js";
 
 /** キューに入れる書き込み操作の種別 */
@@ -85,14 +86,33 @@ export class WriteQueue {
         await this.executeWrite(write);
         this.queue.shift();
         this.emit("flushed", write);
-      } catch {
+      } catch (err) {
         write.retryCount++;
+        logError(`Failed to flush queued write ${write.id} (${write.type} ${write.path})`, err);
         this.emit("error", write);
         break; // 失敗したら中断して次の flush で再試行
       }
     }
 
     this.flushing = false;
+  }
+
+  /** キューが空になるまで待機する（flush 失敗時は reject） */
+  waitForDrain(): Promise<void> {
+    if (this.queue.length === 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const unsubscribe = this.addListener((event, write) => {
+        if (event === "error") {
+          unsubscribe();
+          reject(new Error(`Failed to flush queued write: ${write?.type} ${write?.path}`));
+          return;
+        }
+        if (this.queue.length === 0) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
   }
 
   /** キューをクリアする */

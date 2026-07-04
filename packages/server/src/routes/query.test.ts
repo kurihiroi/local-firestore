@@ -1,6 +1,9 @@
 import type { QueryResponse } from "@local-firestore/shared";
 import type { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createApp } from "../app.js";
+import { IndexManager } from "../services/index-manager.js";
+import { createDatabase } from "../storage/sqlite.js";
 import { createTestApp, jsonBody, request } from "./test-helpers.js";
 
 describe("Query Routes", () => {
@@ -60,5 +63,85 @@ describe("Query Routes", () => {
       constraints: [],
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("Query Routes + IndexManager", () => {
+  function createAppWithIndexManager(mode: "error" | "warn") {
+    const db = createDatabase(":memory:");
+    const indexManager = new IndexManager(mode);
+    return { app: createApp(db, undefined, { indexManager }), indexManager };
+  }
+
+  it("error モードでインデックス未定義の複合クエリは failed-precondition を返す", async () => {
+    const { app } = createAppWithIndexManager("error");
+    const res = await request(app, "POST", "/query", {
+      collectionPath: "users",
+      constraints: [
+        { type: "where", fieldPath: "status", op: "==", value: "active" },
+        { type: "orderBy", fieldPath: "createdAt", direction: "desc" },
+      ],
+    });
+    expect(res.status).toBe(400);
+    const body = await jsonBody(res);
+    expect(body.code).toBe("failed-precondition");
+    expect(String(body.message)).toContain("Missing composite index");
+  });
+
+  it("error モードでもインデックス定義済みならクエリを実行できる", async () => {
+    const { app, indexManager } = createAppWithIndexManager("error");
+    indexManager.loadConfiguration({
+      indexes: [
+        {
+          collectionGroup: "users",
+          queryScope: "COLLECTION",
+          fields: [
+            { fieldPath: "status", order: "ASCENDING" },
+            { fieldPath: "createdAt", order: "DESCENDING" },
+          ],
+        },
+      ],
+    });
+
+    await request(app, "PUT", "/docs/users/alice", {
+      data: { status: "active", createdAt: "2026-01-01" },
+    });
+    const res = await request(app, "POST", "/query", {
+      collectionPath: "users",
+      constraints: [
+        { type: "where", fieldPath: "status", op: "==", value: "active" },
+        { type: "orderBy", fieldPath: "createdAt", direction: "desc" },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const body = await jsonBody<QueryResponse>(res);
+    expect(body.docs).toHaveLength(1);
+  });
+
+  it("warn モードではインデックス未定義でもクエリを実行できる", async () => {
+    const { app } = createAppWithIndexManager("warn");
+    const res = await request(app, "POST", "/query", {
+      collectionPath: "users",
+      constraints: [
+        { type: "where", fieldPath: "status", op: "==", value: "active" },
+        { type: "orderBy", fieldPath: "createdAt", direction: "desc" },
+      ],
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("error モードで集計クエリもバリデーションされる", async () => {
+    const { app } = createAppWithIndexManager("error");
+    const res = await request(app, "POST", "/aggregate", {
+      collectionPath: "users",
+      constraints: [
+        { type: "where", fieldPath: "status", op: "==", value: "active" },
+        { type: "orderBy", fieldPath: "createdAt", direction: "desc" },
+      ],
+      aggregateSpec: { total: { aggregateType: "count" } },
+    });
+    expect(res.status).toBe(400);
+    const body = await jsonBody(res);
+    expect(body.code).toBe("failed-precondition");
   });
 });

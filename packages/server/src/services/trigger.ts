@@ -27,6 +27,16 @@ interface RegisteredTrigger {
   collectionPattern: string;
   eventType: TriggerEventType;
   handler: TriggerHandler;
+  /** Webhook 登録時のコールバック URL（Node.js API 登録時は undefined） */
+  callbackUrl?: string;
+}
+
+/** トリガーの公開情報（一覧取得用） */
+export interface TriggerInfo {
+  id: string;
+  collectionPattern: string;
+  eventType: TriggerEventType;
+  callbackUrl?: string;
 }
 
 let triggerIdCounter = 0;
@@ -69,6 +79,42 @@ export class TriggerService {
   /** onWrite トリガーを登録する（create/update/delete すべて） */
   onWrite(collectionPattern: string, handler: TriggerHandler): string {
     return this.register(collectionPattern, "write", handler);
+  }
+
+  /**
+   * コールバック URL への Webhook トリガーを登録する
+   *
+   * イベント発生時に TriggerEvent を JSON として callbackUrl へ POST する。
+   * 別プロセスで動作する Cloud Functions エミュレータとの連携用。
+   */
+  registerWebhook(
+    collectionPattern: string,
+    eventType: TriggerEventType,
+    callbackUrl: string,
+  ): string {
+    const handler: TriggerHandler = async (event) => {
+      const res = await fetch(callbackUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      });
+      if (!res.ok) {
+        throw new Error(`Webhook callback failed: ${res.status} ${callbackUrl}`);
+      }
+    };
+    const id = `trigger_${++triggerIdCounter}`;
+    this.triggers.push({ id, collectionPattern, eventType, handler, callbackUrl });
+    return id;
+  }
+
+  /** 登録済みトリガーの一覧を取得する */
+  list(): TriggerInfo[] {
+    return this.triggers.map(({ id, collectionPattern, eventType, callbackUrl }) => ({
+      id,
+      collectionPattern,
+      eventType,
+      callbackUrl,
+    }));
   }
 
   /** トリガーを解除する */

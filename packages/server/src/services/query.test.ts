@@ -64,6 +64,53 @@ describe("QueryService", () => {
       expect(results.map((r) => r.documentId).sort()).toEqual(["alice", "charlie", "dave"]);
     });
 
+    describe("__name__ (documentId) フィルタ", () => {
+      it("== でドキュメントIDによる絞り込みができる", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "__name__", op: "==", value: "alice" },
+        ]);
+        expect(results).toHaveLength(1);
+        expect(results[0].documentId).toBe("alice");
+      });
+
+      it("!= でドキュメントIDを除外できる", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "__name__", op: "!=", value: "alice" },
+        ]);
+        expect(results.map((r) => r.documentId).sort()).toEqual(["bob", "charlie", "dave"]);
+      });
+
+      it("in で複数のドキュメントIDを指定できる", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "__name__", op: "in", value: ["alice", "bob"] },
+        ]);
+        expect(results.map((r) => r.documentId).sort()).toEqual(["alice", "bob"]);
+      });
+
+      it("not-in で複数のドキュメントIDを除外できる", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "__name__", op: "not-in", value: ["alice", "bob"] },
+        ]);
+        expect(results.map((r) => r.documentId).sort()).toEqual(["charlie", "dave"]);
+      });
+
+      it("他フィールドの where と組み合わせられる", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "status", op: "==", value: "active" },
+          { type: "where", fieldPath: "__name__", op: "in", value: ["alice", "bob"] },
+        ]);
+        expect(results.map((r) => r.documentId)).toEqual(["alice"]);
+      });
+
+      it("未対応の演算子はエラーになる", () => {
+        expect(() =>
+          queryService.executeQuery("users", [
+            { type: "where", fieldPath: "__name__", op: ">", value: "alice" },
+          ]),
+        ).toThrow("Unsupported operator for documentId()");
+      });
+    });
+
     it("!= フィルタ", () => {
       const results = queryService.executeQuery("users", [
         { type: "where", fieldPath: "status", op: "!=", value: "active" },

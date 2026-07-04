@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  documentId,
   getDocs,
   limit,
   orderBy,
@@ -71,5 +72,30 @@ describe("E2E: Query operations", () => {
     expect(snap.size).toBe(3);
     const names = snap.docs.map((d: QueryDocumentSnapshot) => d.data().name);
     expect(names).toEqual(["Donut", "Eggplant", "Apple"]);
+  });
+
+  it("should filter by documentId() with ==", async () => {
+    const col = collection(ctx.firestore, "products");
+    const q = query(col, where(documentId(), "==", "p3"));
+    const snap = await getDocs(q);
+    expect(snap.size).toBe(1);
+    expect(snap.docs[0].id).toBe("p3");
+    expect(snap.docs[0].data().name).toBe("Carrot");
+  });
+
+  it("should filter by documentId() with in", async () => {
+    const col = collection(ctx.firestore, "products");
+    const q = query(col, where(documentId(), "in", ["p1", "p2"]));
+    const snap = await getDocs(q);
+    expect(snap.size).toBe(2);
+    expect(snap.docs.map((d: QueryDocumentSnapshot) => d.id).sort()).toEqual(["p1", "p2"]);
+  });
+
+  it("should combine documentId() filter with field filter", async () => {
+    const col = collection(ctx.firestore, "products");
+    const q = query(col, where("category", "==", "fruit"), where(documentId(), "in", ["p1", "p3"]));
+    const snap = await getDocs(q);
+    expect(snap.size).toBe(1);
+    expect(snap.docs[0].id).toBe("p1");
   });
 });
