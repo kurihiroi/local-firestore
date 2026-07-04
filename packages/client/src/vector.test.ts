@@ -33,3 +33,19 @@ describe("VectorValue", () => {
     expect(v.toArray()[0]).toBe(1);
   });
 });
+
+describe("VectorValueのシリアライズ", () => {
+  it("toJSONでシリアライズ形式に変換される", () => {
+    const v = vector([1, 2, 3]);
+    expect(v.toJSON()).toEqual({ __type: "vector", values: [1, 2, 3] });
+    expect(JSON.parse(JSON.stringify({ embedding: v }))).toEqual({
+      embedding: { __type: "vector", values: [1, 2, 3] },
+    });
+  });
+
+  it("fromSerializedで復元できる", () => {
+    const v = VectorValue.fromSerialized({ __type: "vector", values: [4, 5] });
+    expect(v.toArray()).toEqual([4, 5]);
+    expect(v.dimensions).toBe(2);
+  });
+});

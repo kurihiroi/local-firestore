@@ -12,6 +12,8 @@ import { createTriggerRoutes } from "./routes/triggers.js";
 import type { AuthProvider } from "./security/auth-provider.js";
 import type { SecurityRulesEngine } from "./security/rules-engine.js";
 import { securityRulesMiddleware } from "./security/rules-middleware.js";
+import type { DatabaseManager } from "./services/database-manager.js";
+import { DEFAULT_DATABASE_ID, isValidDatabaseId } from "./services/database-manager.js";
 import { DocumentService } from "./services/document.js";
 import type { IndexManager } from "./services/index-manager.js";
 import type { ListenerManager } from "./services/listener-manager.js";
@@ -27,9 +29,59 @@ export interface AppOptions {
   authProvider?: AuthProvider;
   triggerService?: TriggerService;
   indexManager?: IndexManager;
+  /** マルチデータベース対応（/databases/:databaseId/* ルーティングを有効化） */
+  databaseManager?: DatabaseManager;
 }
 
 export function createApp(
+  db: Database.Database,
+  listenerManager?: ListenerManager,
+  options?: AppOptions,
+): Hono {
+  const app = buildDatabaseApp(db, listenerManager, options);
+
+  const databaseManager = options?.databaseManager;
+  if (databaseManager) {
+    if (!databaseManager.has(DEFAULT_DATABASE_ID)) {
+      databaseManager.registerDefault(db, listenerManager);
+    }
+
+    // データベースIDごとのサブアプリ（遅延生成してキャッシュ）
+    const subApps = new Map<string, Hono>();
+
+    app.all("/databases/:databaseId/*", async (c) => {
+      const databaseId = c.req.param("databaseId");
+      if (!isValidDatabaseId(databaseId)) {
+        return c.json({ code: "invalid-argument", message: "Invalid database ID" }, 400);
+      }
+
+      let subApp = subApps.get(databaseId);
+      if (!subApp) {
+        const instance = databaseManager.get(databaseId);
+        // メトリクスはデータベースごとに独立させる（/databases/:id/metrics で参照可能）
+        const subOptions: AppOptions = {
+          ...options,
+          metricsCollector: undefined,
+          databaseManager: undefined,
+        };
+        subApp = buildDatabaseApp(instance.db, instance.listenerManager, subOptions);
+        subApps.set(databaseId, subApp);
+      }
+
+      // プレフィックス（/databases/:databaseId）を除去してサブアプリへディスパッチ
+      // databaseId がURLエンコードされている場合もあるためセグメント単位で除去する
+      const url = new URL(c.req.url);
+      const segments = url.pathname.split("/");
+      url.pathname = `/${segments.slice(3).join("/")}`;
+      return subApp.fetch(new Request(url, c.req.raw));
+    });
+  }
+
+  return app;
+}
+
+/** 単一データベースに対するルート一式を構築する */
+function buildDatabaseApp(
   db: Database.Database,
   listenerManager?: ListenerManager,
   options?: AppOptions,

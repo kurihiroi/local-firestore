@@ -6,6 +6,7 @@ import {
   attachWebSocket,
   createApp,
   createDatabase,
+  DatabaseManager,
   DocumentRepository,
   DocumentService,
   ListenerManager,
@@ -18,6 +19,8 @@ export interface TestContext {
   server: Server;
   firestore: Firestore;
   port: number;
+  /** 指定したデータベースIDに接続する Firestore インスタンスを作成する */
+  createFirestore: (databaseId: string) => Firestore;
   cleanup: () => Promise<void>;
 }
 
@@ -34,8 +37,9 @@ export async function startTestServer(options?: TestServerOptions): Promise<Test
   const documentService = new DocumentService(repo);
   const queryService = new QueryService(db);
   const listenerManager = new ListenerManager(queryService);
+  const databaseManager = new DatabaseManager(":memory:");
 
-  const appOptions: AppOptions = {};
+  const appOptions: AppOptions = { databaseManager };
   if (options?.securityRules) {
     appOptions.securityRules = new SecurityRulesEngine(options.securityRules, {
       getDocument: (path) => {
@@ -57,6 +61,13 @@ export async function startTestServer(options?: TestServerOptions): Promise<Test
   attachWebSocket(server, {
     listenerManager,
     getDocument: (path) => documentService.getDocument(path),
+    resolveDatabase: (databaseId) => {
+      const instance = databaseManager.get(databaseId);
+      return {
+        listenerManager: instance.listenerManager,
+        getDocument: (path) => instance.documentService.getDocument(path),
+      };
+    },
   });
 
   const addr = server.address();
@@ -67,6 +78,7 @@ export async function startTestServer(options?: TestServerOptions): Promise<Test
     server,
     firestore,
     port,
+    createFirestore: (databaseId) => getFirestore({ host: "localhost", port }, databaseId),
     cleanup: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

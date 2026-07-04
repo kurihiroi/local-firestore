@@ -4,6 +4,7 @@ export type {
   FirestoreErrorCode,
   PartialWithFieldValue,
   SetOptions,
+  VectorDistanceMeasure,
   WithFieldValue,
 } from "@local-firestore/shared";
 // Aggregate
@@ -56,6 +57,7 @@ export type {
 } from "./listener.js";
 export { onSnapshot, onSnapshotsInSync } from "./listener.js";
 export type {
+  FindNearestOptions,
   Query,
   QueryConstraint,
   QueryConstraintType,
@@ -69,6 +71,7 @@ export {
   documentId,
   endAt,
   endBefore,
+  findNearest,
   getDocs,
   limit,
   limitToLast,

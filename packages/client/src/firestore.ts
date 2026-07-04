@@ -19,7 +19,10 @@ const DEFAULT_SETTINGS: Required<FirestoreSettings> = {
   ssl: false,
 };
 
-export function getFirestore(settings?: FirestoreSettings): Firestore;
+/** デフォルトデータベースのID */
+const DEFAULT_DATABASE_ID = "(default)";
+
+export function getFirestore(settings?: FirestoreSettings, databaseId?: string): Firestore;
 export function getFirestore(_app: unknown, databaseId?: string): Firestore;
 export function getFirestore(
   settingsOrApp?: FirestoreSettings | unknown,
@@ -41,11 +44,17 @@ export function getFirestore(
   // それ以外は app オブジェクト（無視）
 
   const config = { ...DEFAULT_SETTINGS, ...settings };
-  const transport = new HttpTransport(config.host, config.port, config.ssl);
+  const resolvedDatabaseId = databaseId ?? DEFAULT_DATABASE_ID;
+  // デフォルト以外のデータベースは /databases/:databaseId プレフィックス経由でアクセスする
+  const basePath =
+    resolvedDatabaseId === DEFAULT_DATABASE_ID
+      ? ""
+      : `/databases/${encodeURIComponent(resolvedDatabaseId)}`;
+  const transport = new HttpTransport(config.host, config.port, config.ssl, basePath);
   return {
     type: "firestore",
     _transport: transport,
-    _databaseId: databaseId ?? "(default)",
+    _databaseId: resolvedDatabaseId,
   } as Firestore;
 }
 

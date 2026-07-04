@@ -62,3 +62,36 @@ describe("collection()", () => {
     expect(() => collection(db, "users/alice")).toThrow("Invalid collection path");
   });
 });
+
+describe("firestore / converter 公開プロパティ (2-4)", () => {
+  const db = getFirestore();
+
+  it("DocumentReference.firestore が Firestore インスタンスを返す", () => {
+    const ref = doc(db, "users/alice");
+    expect(ref.firestore).toBe(db);
+    expect(ref.firestore).toBe(ref._firestore);
+  });
+
+  it("CollectionReference.firestore が Firestore インスタンスを返す", () => {
+    const ref = collection(db, "users");
+    expect(ref.firestore).toBe(db);
+    expect(ref.firestore).toBe(ref._firestore);
+  });
+
+  it("converter は未設定時 null、withConverter 後は設定したコンバーターを返す", () => {
+    const ref = doc(db, "users/alice");
+    expect(ref.converter).toBeNull();
+
+    const converter = {
+      toFirestore: (value: { name: string }) => value,
+      fromFirestore: (snapshot: { data(): Record<string, unknown> }) =>
+        snapshot.data() as { name: string },
+    };
+    const converted = ref.withConverter(converter);
+    expect(converted.converter).toBe(converter);
+    expect(converted.converter).toBe(converted._converter);
+
+    // 元のリファレンスは変更されない
+    expect(ref.converter).toBeNull();
+  });
+});

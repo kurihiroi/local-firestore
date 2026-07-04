@@ -1,3 +1,4 @@
+import type { VectorDistanceMeasure } from "@local-firestore/shared";
 import Database from "better-sqlite3";
 import { initSchema } from "./schema.js";
 
@@ -10,6 +11,78 @@ export function createDatabase(path: string = ":memory:"): Database.Database {
   db.pragma("busy_timeout = 5000");
 
   initSchema(db);
+  registerVectorFunctions(db);
 
   return db;
+}
+
+/** JSON文字列を数値ベクトルとしてパースする。無効な場合は null */
+function parseVector(json: string): number[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  if (!parsed.every((v): v is number => typeof v === "number" && Number.isFinite(v))) return null;
+  return parsed;
+}
+
+/**
+ * ベクトル距離計算のユーザー定義関数を登録する
+ *
+ * vector_distance(fieldJson, queryVectorJson, measure) -> number | null
+ * - fieldJson: ドキュメント側のベクトル（JSON配列文字列）
+ * - queryVectorJson: クエリベクトル（JSON配列文字列）
+ * - measure: "EUCLIDEAN" | "COSINE" | "DOT_PRODUCT"
+ *
+ * ベクトルが無効・次元不一致の場合は null を返す（該当ドキュメントは検索対象外）。
+ */
+function registerVectorFunctions(db: Database.Database): void {
+  db.function(
+    "vector_distance",
+    { deterministic: true },
+    (fieldJson: unknown, queryVectorJson: unknown, measure: unknown): number | null => {
+      if (typeof fieldJson !== "string" || typeof queryVectorJson !== "string") return null;
+      const target = parseVector(fieldJson);
+      const query = parseVector(queryVectorJson);
+      if (!target || !query || target.length !== query.length) return null;
+      return computeDistance(target, query, measure as VectorDistanceMeasure);
+    },
+  );
+}
+
+function computeDistance(a: number[], b: number[], measure: VectorDistanceMeasure): number | null {
+  switch (measure) {
+    case "EUCLIDEAN": {
+      let sum = 0;
+      for (let i = 0; i < a.length; i++) {
+        const d = a[i] - b[i];
+        sum += d * d;
+      }
+      return Math.sqrt(sum);
+    }
+    case "COSINE": {
+      let dot = 0;
+      let normA = 0;
+      let normB = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+      }
+      if (normA === 0 || normB === 0) return null;
+      return 1 - dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+    case "DOT_PRODUCT": {
+      let dot = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+      }
+      return dot;
+    }
+    default:
+      return null;
+  }
 }

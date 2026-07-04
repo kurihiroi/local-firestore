@@ -320,4 +320,135 @@ describe("QueryService", () => {
       expect(results).toHaveLength(2);
     });
   });
+
+  describe("ベクトル近傍検索 (findNearest)", () => {
+    beforeEach(() => {
+      // {__type:"vector", values:[...]} 形式（クライアント VectorValue のシリアライズ形式）
+      docService.setDocument("items/a", {
+        name: "A",
+        category: "x",
+        embedding: { __type: "vector", values: [1, 0, 0] },
+      });
+      docService.setDocument("items/b", {
+        name: "B",
+        category: "x",
+        embedding: { __type: "vector", values: [0.9, 0.1, 0] },
+      });
+      docService.setDocument("items/c", {
+        name: "C",
+        category: "y",
+        embedding: { __type: "vector", values: [0, 1, 0] },
+      });
+      // 素の配列形式も検索対象になる
+      docService.setDocument("items/d", {
+        name: "D",
+        category: "x",
+        embedding: [-1, 0, 0],
+      });
+      // ベクトルなし・次元不一致のドキュメントは対象外
+      docService.setDocument("items/e", { name: "E", category: "x" });
+      docService.setDocument("items/f", {
+        name: "F",
+        category: "x",
+        embedding: { __type: "vector", values: [1, 0] },
+      });
+    });
+
+    it("EUCLIDEAN: 距離の近い順に limit 件返す", () => {
+      const results = queryService.executeQuery("items", [
+        {
+          type: "findNearest",
+          fieldPath: "embedding",
+          queryVector: [1, 0, 0],
+          limit: 3,
+          distanceMeasure: "EUCLIDEAN",
+        },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["a", "b", "c"]);
+    });
+
+    it("COSINE: 角度の近い順に返す", () => {
+      const results = queryService.executeQuery("items", [
+        {
+          type: "findNearest",
+          fieldPath: "embedding",
+          queryVector: [1, 0, 0],
+          limit: 2,
+          distanceMeasure: "COSINE",
+        },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["a", "b"]);
+    });
+
+    it("DOT_PRODUCT: 内積の大きい順に返す", () => {
+      const results = queryService.executeQuery("items", [
+        {
+          type: "findNearest",
+          fieldPath: "embedding",
+          queryVector: [1, 0, 0],
+          limit: 4,
+          distanceMeasure: "DOT_PRODUCT",
+        },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["a", "b", "c", "d"]);
+    });
+
+    it("whereフィルタと組み合わせられる", () => {
+      const results = queryService.executeQuery("items", [
+        { type: "where", fieldPath: "category", op: "==", value: "x" },
+        {
+          type: "findNearest",
+          fieldPath: "embedding",
+          queryVector: [0, 1, 0],
+          limit: 10,
+          distanceMeasure: "EUCLIDEAN",
+        },
+      ]);
+      // category=y の c は除外され、ベクトルを持つ a, b, d のみが対象
+      expect(results.map((r) => r.documentId).sort()).toEqual(["a", "b", "d"]);
+    });
+
+    it("distanceResultField で距離を結果に含められる", () => {
+      const results = queryService.executeQuery("items", [
+        {
+          type: "findNearest",
+          fieldPath: "embedding",
+          queryVector: [1, 0, 0],
+          limit: 1,
+          distanceMeasure: "EUCLIDEAN",
+          distanceResultField: "distance",
+        },
+      ]);
+      expect(results).toHaveLength(1);
+      expect(results[0].data.distance).toBe(0);
+    });
+
+    it("distanceThreshold で距離の上限を指定できる", () => {
+      const results = queryService.executeQuery("items", [
+        {
+          type: "findNearest",
+          fieldPath: "embedding",
+          queryVector: [1, 0, 0],
+          limit: 10,
+          distanceMeasure: "EUCLIDEAN",
+          distanceThreshold: 0.5,
+        },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["a", "b"]);
+    });
+
+    it("DOT_PRODUCT の distanceThreshold は下限として機能する", () => {
+      const results = queryService.executeQuery("items", [
+        {
+          type: "findNearest",
+          fieldPath: "embedding",
+          queryVector: [1, 0, 0],
+          limit: 10,
+          distanceMeasure: "DOT_PRODUCT",
+          distanceThreshold: 0.5,
+        },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["a", "b"]);
+    });
+  });
 });

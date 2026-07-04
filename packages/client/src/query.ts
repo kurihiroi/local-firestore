@@ -6,11 +6,14 @@ import type {
   QueryResponse,
   SerializedQueryConstraint,
   SerializedWhereConstraint,
+  VectorDistanceMeasure,
   WhereFilterOp,
 } from "@local-firestore/shared";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
+import { FirestoreError } from "./transport.js";
 import type { CollectionReference, Firestore } from "./types.js";
 import { FieldPath } from "./types.js";
+import { VectorValue } from "./vector.js";
 
 // ============================================================
 // Query型
@@ -193,6 +196,69 @@ export function or(...constraints: QueryConstraint[]): QueryConstraint {
   return {
     _serialized: { type: "or", filters },
   };
+}
+
+// ============================================================
+// ベクトル近傍検索（FindNearest）
+// ============================================================
+
+/** findNearest のオプション */
+export interface FindNearestOptions {
+  /** ベクトルが格納されているフィールド */
+  vectorField: string | FieldPath;
+  /** 検索クエリベクトル */
+  queryVector: number[] | VectorValue;
+  /** 返却する最大ドキュメント数 */
+  limit: number;
+  /** 距離の測定方法 */
+  distanceMeasure: VectorDistanceMeasure;
+  /** 指定時、各ドキュメントの距離をこのフィールド名で結果データに含める */
+  distanceResultField?: string;
+  /** 指定時、この距離以内（DOT_PRODUCT は以上）のドキュメントのみ返す */
+  distanceThreshold?: number;
+}
+
+/**
+ * ベクトル近傍検索クエリを作成する
+ *
+ * `where` フィルタ済みのクエリと組み合わせ可能。結果は距離順にソートされる。
+ * `getDocs` で実行する。
+ */
+export function findNearest<T = DocumentData>(
+  source: CollectionReference<T> | Query<T>,
+  options: FindNearestOptions,
+): Query<T> {
+  const queryVector =
+    options.queryVector instanceof VectorValue
+      ? options.queryVector.toArray()
+      : [...options.queryVector];
+
+  if (queryVector.length === 0) {
+    throw new FirestoreError("invalid-argument", "queryVector must not be empty");
+  }
+  if (!queryVector.every((v) => typeof v === "number" && Number.isFinite(v))) {
+    throw new FirestoreError("invalid-argument", "queryVector must contain only finite numbers");
+  }
+  if (!Number.isInteger(options.limit) || options.limit <= 0) {
+    throw new FirestoreError("invalid-argument", "limit must be a positive integer");
+  }
+
+  const fieldStr =
+    options.vectorField instanceof FieldPath ? options.vectorField.toString() : options.vectorField;
+
+  const constraint: QueryConstraint = {
+    _serialized: {
+      type: "findNearest",
+      fieldPath: fieldStr,
+      queryVector,
+      limit: options.limit,
+      distanceMeasure: options.distanceMeasure,
+      distanceResultField: options.distanceResultField,
+      distanceThreshold: options.distanceThreshold,
+    },
+  };
+
+  return query(source, constraint);
 }
 
 // ============================================================
