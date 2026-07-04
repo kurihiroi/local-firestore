@@ -220,8 +220,9 @@ describe("updateDoc()", () => {
 
     await updateDoc(ref, "address.city", "Osaka");
 
+    // ドット記法キーはリーフ更新としてそのまま送信される（サーバー側で深いマージ）
     expect(transport.patch).toHaveBeenCalledWith("/docs/users/alice", {
-      data: { address: { city: "Osaka" } },
+      data: { "address.city": "Osaka" },
     });
   });
 
@@ -247,7 +248,7 @@ describe("updateDoc()", () => {
     await updateDoc(ref, new FieldPath("address", "city"), "Nagoya");
 
     expect(transport.patch).toHaveBeenCalledWith("/docs/users/alice", {
-      data: { address: { city: "Nagoya" } },
+      data: { "address.city": "Nagoya" },
     });
   });
 

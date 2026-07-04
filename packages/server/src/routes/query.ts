@@ -8,6 +8,7 @@ import type {
 import { Hono } from "hono";
 import type { IndexManager } from "../services/index-manager.js";
 import type { QueryService } from "../services/query.js";
+import { QueryValidationError } from "../services/query.js";
 import { isCollectionPath } from "../utils/path.js";
 
 export function createQueryRoutes(queryService: QueryService, indexManager?: IndexManager): Hono {
@@ -37,11 +38,19 @@ export function createQueryRoutes(queryService: QueryService, indexManager?: Ind
       }
     }
 
-    const results = queryService.executeQuery(
-      body.collectionPath,
-      body.constraints,
-      body.collectionGroup,
-    );
+    let results: ReturnType<QueryService["executeQuery"]>;
+    try {
+      results = queryService.executeQuery(
+        body.collectionPath,
+        body.constraints,
+        body.collectionGroup,
+      );
+    } catch (err) {
+      if (err instanceof QueryValidationError) {
+        return c.json<ErrorResponse>({ code: err.code, message: err.message }, 400);
+      }
+      throw err;
+    }
 
     const response: QueryResponse = {
       docs: results.map((doc) => ({

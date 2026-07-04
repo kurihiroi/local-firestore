@@ -61,6 +61,7 @@ export type {
   SerializedLimitConstraint,
   SerializedOrderByConstraint,
   SerializedQueryConstraint,
+  SerializedReference,
   SerializedSpecialValue,
   SerializedTimestamp,
   SerializedVectorValue,

@@ -69,6 +69,12 @@ export interface SerializedBytes {
   value: string; // Base64エンコードされたバイナリデータ
 }
 
+/** シリアライズされたDocumentReference */
+export interface SerializedReference {
+  __type: "reference";
+  value: string; // ドキュメントパス
+}
+
 /** シリアライズされたVectorValue（ドキュメントデータ内の表現） */
 export interface SerializedVectorValue {
   __type: "vector";

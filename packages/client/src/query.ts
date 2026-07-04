@@ -9,6 +9,7 @@ import type {
   VectorDistanceMeasure,
   WhereFilterOp,
 } from "@local-firestore/shared";
+import { deserializeData, serializeValue } from "./serialization.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
 import type { CollectionReference, Firestore } from "./types.js";
@@ -129,7 +130,7 @@ export function where(
 ): QueryConstraint {
   const fieldStr = fieldPath instanceof FieldPath ? fieldPath.toString() : fieldPath;
   return {
-    _serialized: { type: "where", fieldPath: fieldStr, op, value },
+    _serialized: { type: "where", fieldPath: fieldStr, op, value: serializeValue(value) },
   };
 }
 
@@ -157,28 +158,28 @@ export function limitToLast(n: number): QueryConstraint {
 /** startAtカーソル制約を作成する */
 export function startAt(...values: unknown[]): QueryConstraint {
   return {
-    _serialized: { type: "startAt", values },
+    _serialized: { type: "startAt", values: values.map(serializeValue) },
   };
 }
 
 /** startAfterカーソル制約を作成する */
 export function startAfter(...values: unknown[]): QueryConstraint {
   return {
-    _serialized: { type: "startAfter", values },
+    _serialized: { type: "startAfter", values: values.map(serializeValue) },
   };
 }
 
 /** endAtカーソル制約を作成する */
 export function endAt(...values: unknown[]): QueryConstraint {
   return {
-    _serialized: { type: "endAt", values },
+    _serialized: { type: "endAt", values: values.map(serializeValue) },
   };
 }
 
 /** endBeforeカーソル制約を作成する */
 export function endBefore(...values: unknown[]): QueryConstraint {
   return {
-    _serialized: { type: "endBefore", values },
+    _serialized: { type: "endBefore", values: values.map(serializeValue) },
   };
 }
 
@@ -271,6 +272,8 @@ export async function getDocs<T = DocumentData>(
 ): Promise<QuerySnapshot<T>> {
   const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
 
+  validateConstraints(q.constraints);
+
   const transport = q._firestore._transport;
   const body: QueryRequest = {
     collectionPath: q.collectionPath,
@@ -285,11 +288,12 @@ export async function getDocs<T = DocumentData>(
   const docs = res.docs.map((d) => {
     const segments = d.path.split("/");
     const docId = segments[segments.length - 1];
+    const docData = deserializeData(d.data, firestore);
     if (converter) {
       const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
         d.path,
         docId,
-        d.data,
+        docData,
         d.createTime,
         d.updateTime,
         firestore,
@@ -307,7 +311,7 @@ export async function getDocs<T = DocumentData>(
     return new QueryDocumentSnapshot<T>(
       d.path,
       docId,
-      d.data as T,
+      docData as T,
       d.createTime,
       d.updateTime,
       firestore,
@@ -315,4 +319,19 @@ export async function getDocs<T = DocumentData>(
   });
 
   return new QuerySnapshot<T>(docs, undefined, queryOrRef);
+}
+
+/**
+ * クエリ実行前のバリデーション（本家 SDK と同等のチェック）
+ * @internal
+ */
+export function validateConstraints(constraints: SerializedQueryConstraint[]): void {
+  const hasLimitToLast = constraints.some((c) => c.type === "limitToLast");
+  const hasOrderBy = constraints.some((c) => c.type === "orderBy");
+  if (hasLimitToLast && !hasOrderBy) {
+    throw new FirestoreError(
+      "invalid-argument",
+      "limitToLast() queries require specifying at least one orderBy() clause",
+    );
+  }
 }

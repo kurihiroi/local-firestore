@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { DocumentRepository } from "../storage/repository.js";
 import { createDatabase } from "../storage/sqlite.js";
 import { DocumentService } from "./document.js";
-import { QueryService } from "./query.js";
+import { QueryService, QueryValidationError } from "./query.js";
 
 describe("QueryService", () => {
   let db: Database.Database;
@@ -449,6 +449,212 @@ describe("QueryService", () => {
         },
       ]);
       expect(results.map((r) => r.documentId)).toEqual(["a", "b"]);
+    });
+  });
+});
+
+describe("QueryService - Firestore互換セマンティクス", () => {
+  let db: Database.Database;
+  let docService: DocumentService;
+  let queryService: QueryService;
+
+  const ts = (seconds: number, nanoseconds = 0) => ({
+    __type: "timestamp",
+    value: { seconds, nanoseconds },
+  });
+
+  beforeEach(() => {
+    db = createDatabase(":memory:");
+    const repo = new DocumentRepository(db);
+    docService = new DocumentService(repo);
+    queryService = new QueryService(db);
+  });
+
+  describe("Timestamp の比較", () => {
+    beforeEach(() => {
+      docService.setDocument("events/e1", { name: "e1", at: ts(1700000000) });
+      docService.setDocument("events/e2", { name: "e2", at: ts(1700000100) });
+      docService.setDocument("events/e3", { name: "e3", at: ts(1700000200) });
+    });
+
+    it("Timestamp の範囲フィルタが時系列で機能する", () => {
+      const results = queryService.executeQuery("events", [
+        { type: "where", fieldPath: "at", op: ">", value: ts(1700000000) },
+      ]);
+      expect(results.map((r) => r.documentId).sort()).toEqual(["e2", "e3"]);
+    });
+
+    it("Timestamp の orderBy が時系列で機能する", () => {
+      const results = queryService.executeQuery("events", [
+        { type: "orderBy", fieldPath: "at", direction: "desc" },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["e3", "e2", "e1"]);
+    });
+
+    it("Timestamp のカーソルが機能する", () => {
+      const results = queryService.executeQuery("events", [
+        { type: "orderBy", fieldPath: "at", direction: "asc" },
+        { type: "startAfter", values: [ts(1700000000)] },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["e2", "e3"]);
+    });
+  });
+
+  describe("orderBy の欠損フィールド除外", () => {
+    it("orderBy 対象フィールドを持たないドキュメントは除外される", () => {
+      docService.setDocument("items/a", { rank: 2 });
+      docService.setDocument("items/b", {});
+      docService.setDocument("items/c", { rank: 1 });
+      const results = queryService.executeQuery("items", [
+        { type: "orderBy", fieldPath: "rank", direction: "asc" },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["c", "a"]);
+    });
+
+    it("null 値のドキュメントは除外されず先頭に来る", () => {
+      docService.setDocument("items/a", { rank: 1 });
+      docService.setDocument("items/b", { rank: null });
+      const results = queryService.executeQuery("items", [
+        { type: "orderBy", fieldPath: "rank", direction: "asc" },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["b", "a"]);
+    });
+  });
+
+  describe("型をまたいだ順序・型ブラケット", () => {
+    beforeEach(() => {
+      docService.setDocument("mixed/bool", { v: true });
+      docService.setDocument("mixed/num", { v: 1 });
+      docService.setDocument("mixed/str", { v: "1" });
+      docService.setDocument("mixed/nul", { v: null });
+    });
+
+    it("orderBy は Firestore の型順序 (null < boolean < number < string) に従う", () => {
+      const results = queryService.executeQuery("mixed", [
+        { type: "orderBy", fieldPath: "v", direction: "asc" },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["nul", "bool", "num", "str"]);
+    });
+
+    it("== は boolean と数値を区別する", () => {
+      const results = queryService.executeQuery("mixed", [
+        { type: "where", fieldPath: "v", op: "==", value: true },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["bool"]);
+    });
+
+    it("範囲フィルタは同じ型の値のみマッチする", () => {
+      const results = queryService.executeQuery("mixed", [
+        { type: "where", fieldPath: "v", op: ">=", value: 0 },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["num"]);
+    });
+
+    it("!= はフィールド欠損・null のドキュメントを除外する", () => {
+      docService.setDocument("mixed/missing", { other: 1 });
+      const results = queryService.executeQuery("mixed", [
+        { type: "where", fieldPath: "v", op: "!=", value: 1 },
+      ]);
+      expect(results.map((r) => r.documentId).sort()).toEqual(["bool", "str"]);
+    });
+  });
+
+  describe("暗黙の __name__ 順序", () => {
+    it("orderBy なしのクエリはドキュメントパス昇順で返る", () => {
+      docService.setDocument("items/c", { v: 1 });
+      docService.setDocument("items/a", { v: 2 });
+      docService.setDocument("items/b", { v: 3 });
+      const results = queryService.executeQuery("items", []);
+      expect(results.map((r) => r.documentId)).toEqual(["a", "b", "c"]);
+    });
+
+    it("orderBy の同値は __name__ でタイブレークされる", () => {
+      docService.setDocument("items/c", { v: 1 });
+      docService.setDocument("items/a", { v: 1 });
+      docService.setDocument("items/b", { v: 0 });
+      const results = queryService.executeQuery("items", [
+        { type: "orderBy", fieldPath: "v", direction: "asc" },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["b", "a", "c"]);
+    });
+
+    it("不等式フィルタのみのクエリはそのフィールドで暗黙にソートされる", () => {
+      docService.setDocument("items/a", { v: 3 });
+      docService.setDocument("items/b", { v: 1 });
+      docService.setDocument("items/c", { v: 2 });
+      const results = queryService.executeQuery("items", [
+        { type: "where", fieldPath: "v", op: ">", value: 0 },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["b", "c", "a"]);
+    });
+  });
+
+  describe("複数 orderBy のカーソル", () => {
+    beforeEach(() => {
+      docService.setDocument("posts/p1", { category: "a", score: 1 });
+      docService.setDocument("posts/p2", { category: "a", score: 2 });
+      docService.setDocument("posts/p3", { category: "b", score: 1 });
+      docService.setDocument("posts/p4", { category: "b", score: 2 });
+    });
+
+    it("startAfter がタプル比較（辞書式）で機能する", () => {
+      const results = queryService.executeQuery("posts", [
+        { type: "orderBy", fieldPath: "category", direction: "asc" },
+        { type: "orderBy", fieldPath: "score", direction: "asc" },
+        { type: "startAfter", values: ["a", 1] },
+      ]);
+      // 単純 AND なら p3 (b,1) が漏れるが、辞書式なら含まれる
+      expect(results.map((r) => r.documentId)).toEqual(["p2", "p3", "p4"]);
+    });
+
+    it("asc + desc 混在の startAt が機能する", () => {
+      const results = queryService.executeQuery("posts", [
+        { type: "orderBy", fieldPath: "category", direction: "asc" },
+        { type: "orderBy", fieldPath: "score", direction: "desc" },
+        { type: "startAt", values: ["a", 1] },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["p1", "p4", "p3"]);
+    });
+  });
+
+  describe("limit / limitToLast", () => {
+    it("limitToLast は orderBy なしでエラーになる", () => {
+      docService.setDocument("items/a", { v: 1 });
+      expect(() => queryService.executeQuery("items", [{ type: "limitToLast", limit: 2 }])).toThrow(
+        QueryValidationError,
+      );
+    });
+
+    it("limit と limitToLast が両方指定された場合は最後が有効", () => {
+      docService.setDocument("items/a", { v: 1 });
+      docService.setDocument("items/b", { v: 2 });
+      docService.setDocument("items/c", { v: 3 });
+      const results = queryService.executeQuery("items", [
+        { type: "orderBy", fieldPath: "v", direction: "asc" },
+        { type: "limit", limit: 1 },
+        { type: "limitToLast", limit: 2 },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["b", "c"]);
+    });
+  });
+
+  describe("array-contains の等値セマンティクス", () => {
+    it("boolean 要素は数値要素とマッチしない", () => {
+      docService.setDocument("items/a", { tags: [1, 2] });
+      docService.setDocument("items/b", { tags: [true] });
+      const results = queryService.executeQuery("items", [
+        { type: "where", fieldPath: "tags", op: "array-contains", value: true },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["b"]);
+    });
+
+    it("Timestamp 要素がマッチする", () => {
+      docService.setDocument("items/a", { times: [ts(100), ts(200)] });
+      docService.setDocument("items/b", { times: [ts(300)] });
+      const results = queryService.executeQuery("items", [
+        { type: "where", fieldPath: "times", op: "array-contains", value: ts(200) },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["a"]);
     });
   });
 });

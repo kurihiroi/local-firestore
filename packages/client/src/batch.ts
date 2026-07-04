@@ -5,6 +5,7 @@ import type {
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
+import { serializeData } from "./serialization.js";
 import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
 
@@ -31,7 +32,7 @@ export class WriteBatch {
     this.operations.push({
       type: "set",
       path: ref.path,
-      data: dbData as DocumentData,
+      data: serializeData(dbData as DocumentData),
     });
     return this;
   }
@@ -41,7 +42,7 @@ export class WriteBatch {
     this.operations.push({
       type: "update",
       path: ref.path,
-      data: data as DocumentData,
+      data: serializeData(data as DocumentData),
     });
     return this;
   }
