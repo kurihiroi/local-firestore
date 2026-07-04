@@ -67,6 +67,12 @@ function getDocIdFromPath(path: string): string {
   return segments[segments.length - 1];
 }
 
+/** サブスクライブメッセージに含める databaseId（デフォルトデータベースは省略） */
+function getSubscribeDatabaseId(firestore: Firestore): string | undefined {
+  const databaseId = firestore._databaseId;
+  return databaseId && databaseId !== "(default)" ? databaseId : undefined;
+}
+
 /** Firestoreインスタンスごとのスナップショットキャッシュ */
 const snapshotCaches = new WeakMap<Firestore, SnapshotCache>();
 
@@ -231,6 +237,7 @@ export function onSnapshotDoc<T = DocumentData>(
     type: "subscribe_doc",
     subscriptionId,
     path: ref.path,
+    databaseId: getSubscribeDatabaseId(firestore),
   });
 
   manager.registerSubscription(subscriptionId, message);
@@ -285,6 +292,7 @@ export function onSnapshotQuery<T = DocumentData>(
     collectionPath,
     collectionGroup,
     constraints,
+    databaseId: getSubscribeDatabaseId(firestore),
   });
 
   manager.registerSubscription(subscriptionId, message);

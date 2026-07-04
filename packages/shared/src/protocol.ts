@@ -189,6 +189,8 @@ export interface SubscribeDocMessage {
   type: "subscribe_doc";
   subscriptionId: string;
   path: string;
+  /** 対象データベースID（省略時はデフォルトデータベース） */
+  databaseId?: string;
 }
 
 /** クライアント → サーバー: クエリリスナー登録 */
@@ -198,6 +200,8 @@ export interface SubscribeQueryMessage {
   collectionPath: string;
   collectionGroup?: boolean;
   constraints: SerializedQueryConstraint[];
+  /** 対象データベースID（省略時はデフォルトデータベース） */
+  databaseId?: string;
 }
 
 /** クライアント → サーバー: リスナー解除 */

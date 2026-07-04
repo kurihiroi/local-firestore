@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addDoc, deleteDoc, setDoc, updateDoc } from "./crud.js";
-import { disableNetwork, enableNetwork, waitForPendingWrites } from "./firestore.js";
+import { disableNetwork, enableNetwork, getFirestore, waitForPendingWrites } from "./firestore.js";
 import { getWriteQueue, isNetworkEnabled } from "./network-state.js";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 
@@ -178,5 +178,31 @@ describe("waitForPendingWrites()", () => {
     const pending = waitForPendingWrites(firestore);
     await enableNetwork(firestore);
     await expect(pending).rejects.toThrow("Failed to flush queued write");
+  });
+});
+
+describe("getFirestore() のマルチデータベース対応", () => {
+  it("デフォルトでは (default) データベースに接続する", () => {
+    const db = getFirestore();
+    expect(db._databaseId).toBe("(default)");
+    expect(db._transport.getBaseUrl()).toBe("http://localhost:8080");
+  });
+
+  it("settings + databaseId でデータベースを指定できる", () => {
+    const db = getFirestore({ host: "localhost", port: 9090 }, "my-db");
+    expect(db._databaseId).toBe("my-db");
+    expect(db._transport.getBaseUrl()).toBe("http://localhost:9090/databases/my-db");
+  });
+
+  it("app + databaseId 形式でもデータベースを指定できる", () => {
+    const db = getFirestore({ name: "app" }, "db2");
+    expect(db._databaseId).toBe("db2");
+    expect(db._transport.getBaseUrl()).toBe("http://localhost:8080/databases/db2");
+  });
+
+  it("(default) を明示指定した場合はプレフィックスなし", () => {
+    const db = getFirestore(undefined, "(default)");
+    expect(db._databaseId).toBe("(default)");
+    expect(db._transport.getBaseUrl()).toBe("http://localhost:8080");
   });
 });

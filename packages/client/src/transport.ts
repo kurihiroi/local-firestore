@@ -4,15 +4,23 @@ export class HttpTransport {
   private baseUrl: string;
   private wsUrl: string;
 
-  constructor(host: string, port: number, ssl = false) {
+  /**
+   * @param basePath 全リクエストパスに付与するプレフィックス
+   *                 （マルチデータベース時の `/databases/:databaseId` など）
+   */
+  constructor(host: string, port: number, ssl = false, basePath = "") {
     const protocol = ssl ? "https" : "http";
-    this.baseUrl = `${protocol}://${host}:${port}`;
+    this.baseUrl = `${protocol}://${host}:${port}${basePath}`;
     const wsProtocol = ssl ? "wss" : "ws";
     this.wsUrl = `${wsProtocol}://${host}:${port}`;
   }
 
   getWebSocketUrl(): string {
     return this.wsUrl;
+  }
+
+  getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   async get<T>(path: string): Promise<T> {

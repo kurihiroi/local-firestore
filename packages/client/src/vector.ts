@@ -1,3 +1,5 @@
+import type { SerializedVectorValue } from "@local-firestore/shared";
+
 /**
  * VectorValue - ベクトル埋め込み値の型
  *
@@ -29,6 +31,21 @@ export class VectorValue {
   isEqual(other: VectorValue): boolean {
     if (this._values.length !== other._values.length) return false;
     return this._values.every((v, i) => v === other._values[i]);
+  }
+
+  /** @internal シリアライズ形式に変換 */
+  toSerialized(): SerializedVectorValue {
+    return { __type: "vector", values: this.toArray() };
+  }
+
+  /** JSON.stringify 時にシリアライズ形式で送信されるようにする */
+  toJSON(): SerializedVectorValue {
+    return this.toSerialized();
+  }
+
+  /** @internal シリアライズ形式から復元 */
+  static fromSerialized(value: SerializedVectorValue): VectorValue {
+    return new VectorValue(value.values);
   }
 }
 

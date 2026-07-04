@@ -27,6 +27,13 @@ export {
   SecurityRulesEngine,
 } from "./security/rules-engine.js";
 export { securityRulesMiddleware } from "./security/rules-middleware.js";
+export type { DatabaseInstance } from "./services/database-manager.js";
+export {
+  DatabaseManager,
+  DEFAULT_DATABASE_ID,
+  isValidDatabaseId,
+  resolveDatabasePath,
+} from "./services/database-manager.js";
 export { DocumentNotFoundError, DocumentService } from "./services/document.js";
 export type {
   CompositeIndex,
@@ -57,4 +64,5 @@ export { DocumentRepository } from "./storage/repository.js";
 export { createDatabase } from "./storage/sqlite.js";
 export type { TlsOptions } from "./tls.js";
 export { createTlsServer, getTlsOptionsFromEnv, loadTlsCertificates } from "./tls.js";
+export type { DatabaseListenerDeps, WebSocketDeps } from "./websocket.js";
 export { attachWebSocket } from "./websocket.js";

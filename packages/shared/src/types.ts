@@ -69,6 +69,12 @@ export interface SerializedBytes {
   value: string; // Base64エンコードされたバイナリデータ
 }
 
+/** シリアライズされたVectorValue（ドキュメントデータ内の表現） */
+export interface SerializedVectorValue {
+  __type: "vector";
+  values: number[];
+}
+
 /** FieldValueセンチネルの種別 */
 export type FieldValueType =
   | "serverTimestamp"
@@ -177,7 +183,8 @@ export type SerializedQueryConstraint =
   | SerializedOrderByConstraint
   | SerializedLimitConstraint
   | SerializedCursorConstraint
-  | SerializedCompositeFilterConstraint;
+  | SerializedCompositeFilterConstraint
+  | SerializedFindNearestConstraint;
 
 export interface SerializedWhereConstraint {
   type: "where";
@@ -205,6 +212,22 @@ export interface SerializedCursorConstraint {
 export interface SerializedCompositeFilterConstraint {
   type: "and" | "or";
   filters: SerializedWhereConstraint[];
+}
+
+/** ベクトル距離の測定方法 */
+export type VectorDistanceMeasure = "EUCLIDEAN" | "COSINE" | "DOT_PRODUCT";
+
+/** シリアライズされたベクトル近傍検索制約 */
+export interface SerializedFindNearestConstraint {
+  type: "findNearest";
+  fieldPath: string;
+  queryVector: number[];
+  limit: number;
+  distanceMeasure: VectorDistanceMeasure;
+  /** 指定時、各ドキュメントの距離をこのフィールド名で結果データに含める */
+  distanceResultField?: string;
+  /** 指定時、この距離以内（DOT_PRODUCT は以上）のドキュメントのみ返す */
+  distanceThreshold?: number;
 }
 
 // ============================================================

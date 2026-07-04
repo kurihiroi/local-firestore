@@ -4,6 +4,7 @@ import type {
   SerializedAggregateSpec,
   SerializedCompositeFilterConstraint,
   SerializedCursorConstraint,
+  SerializedFindNearestConstraint,
   SerializedLimitConstraint,
   SerializedOrderByConstraint,
   SerializedQueryConstraint,
@@ -19,6 +20,13 @@ export class QueryService {
     constraints: SerializedQueryConstraint[],
     collectionGroup = false,
   ): DocumentMetadata[] {
+    const findNearest = constraints.find(
+      (c): c is SerializedFindNearestConstraint => c.type === "findNearest",
+    );
+    if (findNearest) {
+      return this.executeFindNearest(collectionPath, constraints, findNearest, collectionGroup);
+    }
+
     const { conditions, params } = buildFilterConditions(
       collectionPath,
       constraints,
@@ -91,6 +99,64 @@ export class QueryService {
     }
 
     return results;
+  }
+
+  /**
+   * ベクトル近傍検索を実行する
+   *
+   * where フィルタ適用後、対象フィールドとクエリベクトルの距離を
+   * SQLite UDF（vector_distance）で計算し、距離順に limit 件返す。
+   * orderBy / limit / カーソル制約は距離順ソートに置き換えられるため無視する。
+   */
+  private executeFindNearest(
+    collectionPath: string,
+    constraints: SerializedQueryConstraint[],
+    findNearest: SerializedFindNearestConstraint,
+    collectionGroup: boolean,
+  ): DocumentMetadata[] {
+    const { conditions, params } = buildFilterConditions(
+      collectionPath,
+      constraints,
+      collectionGroup,
+    );
+
+    // ベクトルは {__type:"vector", values:[...]} 形式または素の配列の両方を受け付ける
+    const fieldPath = escapePath(findNearest.fieldPath);
+    const fieldExpr = `COALESCE(json_extract(data, '$.${fieldPath}.values'), json_extract(data, '$.${fieldPath}'))`;
+    const distanceExpr = `vector_distance(${fieldExpr}, ?, ?)`;
+
+    const outerConditions = ["__distance IS NOT NULL"];
+    const outerParams: unknown[] = [];
+    if (findNearest.distanceThreshold !== undefined) {
+      // DOT_PRODUCT は値が大きいほど近い
+      outerConditions.push(
+        findNearest.distanceMeasure === "DOT_PRODUCT" ? "__distance >= ?" : "__distance <= ?",
+      );
+      outerParams.push(findNearest.distanceThreshold);
+    }
+    const orderDirection = findNearest.distanceMeasure === "DOT_PRODUCT" ? "DESC" : "ASC";
+
+    const sql =
+      `SELECT * FROM (SELECT *, ${distanceExpr} AS __distance FROM documents WHERE ${conditions.join(" AND ")}) ` +
+      `WHERE ${outerConditions.join(" AND ")} ORDER BY __distance ${orderDirection} LIMIT ?`;
+
+    const rows = this.db
+      .prepare(sql)
+      .all(
+        JSON.stringify(findNearest.queryVector),
+        findNearest.distanceMeasure,
+        ...params,
+        ...outerParams,
+        findNearest.limit,
+      ) as (RawRow & { __distance: number })[];
+
+    return rows.map((row) => {
+      const metadata = toMetadata(row);
+      if (findNearest.distanceResultField) {
+        metadata.data[findNearest.distanceResultField] = row.__distance;
+      }
+      return metadata;
+    });
   }
 
   executeAggregate(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createCollectionReference, createDocumentReference } from "./references.js";
+import type { SnapshotOptions } from "./types.js";
 import { DocumentSnapshot, FieldPath, SnapshotMetadata, Timestamp } from "./types.js";
 
 describe("Timestamp", () => {
@@ -163,5 +164,28 @@ describe("SnapshotMetadata", () => {
     const m3 = new SnapshotMetadata(true, false);
     expect(m1.isEqual(m2)).toBe(true);
     expect(m1.isEqual(m3)).toBe(false);
+  });
+});
+
+describe("SnapshotOptions (2-2)", () => {
+  const firestore = { type: "firestore" as const, _transport: {} as never };
+
+  it("data() は SnapshotOptions を受け取れる（ローカルでは no-op）", () => {
+    const collRef = createCollectionReference(firestore, "users");
+    const ref = createDocumentReference(firestore, "users/alice", "alice", collRef);
+    const snapshot = new DocumentSnapshot(ref, { name: "Alice" }, null, null);
+
+    const options: SnapshotOptions = { serverTimestamps: "estimate" };
+    expect(snapshot.data(options)).toEqual({ name: "Alice" });
+    expect(snapshot.data({ serverTimestamps: "previous" })).toEqual({ name: "Alice" });
+    expect(snapshot.data({ serverTimestamps: "none" })).toEqual({ name: "Alice" });
+    expect(snapshot.data({})).toEqual({ name: "Alice" });
+    expect(snapshot.data()).toEqual({ name: "Alice" });
+  });
+
+  it("serverTimestamps は firebase 互換のリテラル型のみ許可される", () => {
+    // @ts-expect-error 不正な値は型エラー
+    const invalid: SnapshotOptions = { serverTimestamps: "invalid" };
+    expect(invalid).toBeDefined();
   });
 });

@@ -5,19 +5,19 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
+      "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     }
   },
   "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "sideEffects": false,
   "files": [
     "dist"
   ],
   "bin": {
-    "local-firestore": "./dist/cli.mjs"
+    "local-firestore": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsup",

@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { getFirestore } from "./firestore.js";
+import type {
+  QueryConstraintType,
+  QueryFilterConstraint,
+  QueryNonFilterConstraint,
+} from "./query.js";
 import {
   and,
   collectionGroup,
   endAt,
   endBefore,
+  findNearest,
   limit,
   limitToLast,
   or,
@@ -15,6 +21,9 @@ import {
   where,
 } from "./query.js";
 import { collection } from "./references.js";
+import { FirestoreError } from "./transport.js";
+import { FieldPath } from "./types.js";
+import { vector } from "./vector.js";
 
 describe("query()", () => {
   const db = getFirestore();
@@ -121,5 +130,141 @@ describe("制約ヘルパー", () => {
         { type: "where", fieldPath: "x", op: "==", value: 2 },
       ],
     });
+  });
+});
+
+describe("findNearest()", () => {
+  const db = getFirestore();
+  const itemsRef = collection(db, "items");
+
+  it("findNearest制約付きのQueryを作成できる", () => {
+    const q = findNearest(itemsRef, {
+      vectorField: "embedding",
+      queryVector: [1, 2, 3],
+      limit: 5,
+      distanceMeasure: "COSINE",
+    });
+    expect(q.type).toBe("query");
+    expect(q.constraints).toEqual([
+      {
+        type: "findNearest",
+        fieldPath: "embedding",
+        queryVector: [1, 2, 3],
+        limit: 5,
+        distanceMeasure: "COSINE",
+        distanceResultField: undefined,
+        distanceThreshold: undefined,
+      },
+    ]);
+  });
+
+  it("VectorValueをクエリベクトルとして渡せる", () => {
+    const q = findNearest(itemsRef, {
+      vectorField: "embedding",
+      queryVector: vector([0.5, 0.5]),
+      limit: 3,
+      distanceMeasure: "EUCLIDEAN",
+    });
+    const c = q.constraints[0] as { queryVector: number[] };
+    expect(c.queryVector).toEqual([0.5, 0.5]);
+  });
+
+  it("FieldPathをvectorFieldとして渡せる", () => {
+    const q = findNearest(itemsRef, {
+      vectorField: new FieldPath("nested", "embedding"),
+      queryVector: [1, 0],
+      limit: 1,
+      distanceMeasure: "DOT_PRODUCT",
+    });
+    const c = q.constraints[0] as { fieldPath: string };
+    expect(c.fieldPath).toBe("nested.embedding");
+  });
+
+  it("whereフィルタ済みQueryと組み合わせられる", () => {
+    const base = query(itemsRef, where("category", "==", "x"));
+    const q = findNearest(base, {
+      vectorField: "embedding",
+      queryVector: [1],
+      limit: 2,
+      distanceMeasure: "EUCLIDEAN",
+      distanceResultField: "distance",
+      distanceThreshold: 0.5,
+    });
+    expect(q.constraints).toHaveLength(2);
+    expect(q.constraints[1]).toMatchObject({
+      type: "findNearest",
+      distanceResultField: "distance",
+      distanceThreshold: 0.5,
+    });
+  });
+
+  it("空のqueryVectorはエラー", () => {
+    expect(() =>
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: [],
+        limit: 1,
+        distanceMeasure: "COSINE",
+      }),
+    ).toThrow(FirestoreError);
+  });
+
+  it("非有限数を含むqueryVectorはエラー", () => {
+    expect(() =>
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: [1, Number.NaN],
+        limit: 1,
+        distanceMeasure: "COSINE",
+      }),
+    ).toThrow(FirestoreError);
+  });
+
+  it("limitが正の整数でない場合はエラー", () => {
+    expect(() =>
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: [1],
+        limit: 0,
+        distanceMeasure: "COSINE",
+      }),
+    ).toThrow(FirestoreError);
+  });
+});
+
+describe("クエリ制約の型定義 (2-5)", () => {
+  const db = getFirestore();
+  const usersRef = collection(db, "users");
+
+  it("QueryConstraintType は firebase 互換の制約種別リテラルを網羅する", () => {
+    const types: QueryConstraintType[] = [
+      "where",
+      "orderBy",
+      "limit",
+      "limitToLast",
+      "startAt",
+      "startAfter",
+      "endAt",
+      "endBefore",
+    ];
+    expect(types).toHaveLength(8);
+
+    // @ts-expect-error 未定義の制約種別は型エラー
+    const invalid: QueryConstraintType = "unknownConstraint";
+    expect(invalid).toBeDefined();
+  });
+
+  it("QueryFilterConstraint / QueryNonFilterConstraint を query() に渡せる", () => {
+    const filter: QueryFilterConstraint = where("age", ">=", 18);
+    const composite: QueryFilterConstraint = or(
+      where("status", "==", "active"),
+      where("status", "==", "pending"),
+    );
+    const nonFilter: QueryNonFilterConstraint = orderBy("age");
+    const limitConstraint: QueryNonFilterConstraint = limit(10);
+
+    const q = query(usersRef, filter, composite, nonFilter, limitConstraint);
+    expect(q.constraints).toHaveLength(4);
+    expect(q.constraints.map((c) => c.type)).toEqual(["where", "or", "orderBy", "limit"]);
   });
 });

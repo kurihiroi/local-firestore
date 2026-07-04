@@ -161,3 +161,23 @@ describe("HttpTransport", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("HttpTransport basePath（マルチデータベース）", () => {
+  it("basePathが全リクエストURLにプレフィックスとして付与される", async () => {
+    const mockResponse = { ok: true, json: () => Promise.resolve({}) };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
+
+    const transport = new HttpTransport("localhost", 8080, false, "/databases/mydb");
+    await transport.get("/docs/users/alice");
+
+    expect(fetch).toHaveBeenCalledWith("http://localhost:8080/databases/mydb/docs/users/alice");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("basePath指定時もWebSocket URLにはプレフィックスが付かない", () => {
+    const transport = new HttpTransport("localhost", 8080, false, "/databases/mydb");
+    expect(transport.getWebSocketUrl()).toBe("ws://localhost:8080");
+    expect(transport.getBaseUrl()).toBe("http://localhost:8080/databases/mydb");
+  });
+});

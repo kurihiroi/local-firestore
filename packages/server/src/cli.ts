@@ -5,6 +5,7 @@ import type { LogLevel } from "./middleware/logger.js";
 import { JsonLogOutput, Logger } from "./middleware/logger.js";
 import type { AuthProvider } from "./security/auth-provider.js";
 import { LocalAuthProvider } from "./security/auth-provider.js";
+import { DatabaseManager } from "./services/database-manager.js";
 import { DocumentService } from "./services/document.js";
 import type { IndexValidationMode } from "./services/index-manager.js";
 import { IndexManager } from "./services/index-manager.js";
@@ -113,11 +114,15 @@ async function main() {
   // 複合インデックスのバリデーション（INDEXES_PATH 指定時のみ有効）
   const indexManager = createIndexManager(logger);
 
+  // マルチデータベース対応（/databases/:databaseId/* で独立した SQLite ファイルを使用）
+  const databaseManager = new DatabaseManager(dbPath);
+
   const app = createApp(db, listenerManager, {
     logger,
     authProvider,
     triggerService,
     indexManager,
+    databaseManager,
   });
 
   // TTL による期限切れドキュメントの自動削除（TTL_POLICIES 指定時のみ有効）
@@ -140,6 +145,13 @@ async function main() {
   attachWebSocket(server, {
     listenerManager,
     getDocument: (path) => documentService.getDocument(path),
+    resolveDatabase: (databaseId) => {
+      const instance = databaseManager.get(databaseId);
+      return {
+        listenerManager: instance.listenerManager,
+        getDocument: (path) => instance.documentService.getDocument(path),
+      };
+    },
   });
 }
 
