@@ -16,6 +16,21 @@ export interface TtlCleanupResult {
 }
 
 /**
+ * コレクションパスが TTL ポリシーのパターンにマッチするか判定する
+ *
+ * 例: "users/{userId}/sessions" は "users/alice/sessions" にマッチ
+ */
+export function matchesCollectionPattern(collectionPath: string, pattern: string): boolean {
+  const patternParts = pattern.split("/");
+  const pathParts = collectionPath.split("/");
+  if (patternParts.length !== pathParts.length) return false;
+  return patternParts.every((part, i) => {
+    if (part.startsWith("{") && part.endsWith("}")) return true;
+    return part === pathParts[i];
+  });
+}
+
+/**
  * TTL (Time-to-Live) サービス
  *
  * 指定フィールドの Timestamp を基に期限切れドキュメントを自動削除する。
@@ -25,12 +40,12 @@ export class TtlService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private documentService: DocumentService;
   private getDocuments: (collectionPath: string) => DocumentMetadata[];
-  private onDocumentDeleted?: (path: string) => void;
+  private onDocumentDeleted?: (path: string, oldDocument: DocumentMetadata) => void;
 
   constructor(
     documentService: DocumentService,
     getDocuments: (collectionPath: string) => DocumentMetadata[],
-    onDocumentDeleted?: (path: string) => void,
+    onDocumentDeleted?: (path: string, oldDocument: DocumentMetadata) => void,
   ) {
     this.documentService = documentService;
     this.getDocuments = getDocuments;
@@ -83,7 +98,7 @@ export class TtlService {
       for (const doc of docs) {
         if (this.isExpired(doc, policy.timestampField, now)) {
           this.documentService.deleteDocument(doc.path);
-          this.onDocumentDeleted?.(doc.path);
+          this.onDocumentDeleted?.(doc.path, doc);
           deletedPaths.push(doc.path);
         }
       }

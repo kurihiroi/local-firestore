@@ -8,10 +8,23 @@ import type {
   SetOptions,
   WithFieldValue,
 } from "@local-firestore/shared";
+import { logDebug } from "./logger.js";
+import { getWriteQueue, isNetworkEnabled } from "./network-state.js";
 import { doc } from "./references.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import type { CollectionReference, DocumentReference } from "./types.js";
 import { DocumentSnapshot, FieldPath } from "./types.js";
+
+const AUTO_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/** Firestore互換の20文字のドキュメントIDをクライアント側で生成する */
+function generateAutoId(): string {
+  let id = "";
+  for (let i = 0; i < 20; i++) {
+    id += AUTO_ID_ALPHABET[Math.floor(Math.random() * AUTO_ID_ALPHABET.length)];
+  }
+  return id;
+}
 
 /** ドキュメントを取得する */
 export async function getDoc<T = DocumentData>(
@@ -62,6 +75,16 @@ export async function setDoc<T = DocumentData>(
       ? reference._converter.toFirestore(data as PartialWithFieldValue<T>, options)
       : reference._converter.toFirestore(data as WithFieldValue<T>)
     : data;
+  if (!isNetworkEnabled(reference._firestore)) {
+    logDebug(`Network disabled, queueing set for ${reference.path}`);
+    getWriteQueue(reference._firestore).enqueue(
+      "set",
+      reference.path,
+      dbData as DocumentData,
+      options,
+    );
+    return;
+  }
   const body: SetDocumentRequest = { data: dbData as DocumentData, options };
   await transport.put(`/docs/${reference.path}`, body);
 }
@@ -73,6 +96,14 @@ export async function addDoc<T = DocumentData>(
 ): Promise<DocumentReference<T>> {
   const transport = reference._firestore._transport;
   const dbData = reference._converter ? reference._converter.toFirestore(data) : data;
+  if (!isNetworkEnabled(reference._firestore)) {
+    // オフライン時は ID をクライアント側で生成し、set としてキューする
+    const documentId = generateAutoId();
+    const path = `${reference.path}/${documentId}`;
+    logDebug(`Network disabled, queueing add as set for ${path}`);
+    getWriteQueue(reference._firestore).enqueue("set", path, dbData as DocumentData);
+    return doc<T>(reference, documentId);
+  }
   const body: AddDocumentRequest = {
     collectionPath: reference.path,
     data: dbData as DocumentData,
@@ -121,6 +152,11 @@ export async function updateDoc<T = DocumentData>(
     data = dataOrField;
   }
 
+  if (!isNetworkEnabled(reference._firestore)) {
+    logDebug(`Network disabled, queueing update for ${reference.path}`);
+    getWriteQueue(reference._firestore).enqueue("update", reference.path, data as DocumentData);
+    return;
+  }
   await transport.patch(`/docs/${reference.path}`, { data });
 }
 
@@ -139,6 +175,11 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 
 /** ドキュメントを削除する */
 export async function deleteDoc<T = DocumentData>(reference: DocumentReference<T>): Promise<void> {
+  if (!isNetworkEnabled(reference._firestore)) {
+    logDebug(`Network disabled, queueing delete for ${reference.path}`);
+    getWriteQueue(reference._firestore).enqueue("delete", reference.path);
+    return;
+  }
   const transport = reference._firestore._transport;
   await transport.delete(`/docs/${reference.path}`);
 }

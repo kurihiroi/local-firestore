@@ -6,10 +6,11 @@ import type {
   QueryResponse,
 } from "@local-firestore/shared";
 import { Hono } from "hono";
+import type { IndexManager } from "../services/index-manager.js";
 import type { QueryService } from "../services/query.js";
 import { isCollectionPath } from "../utils/path.js";
 
-export function createQueryRoutes(queryService: QueryService): Hono {
+export function createQueryRoutes(queryService: QueryService, indexManager?: IndexManager): Hono {
   const app = new Hono();
 
   // POST /query - クエリ実行
@@ -21,6 +22,19 @@ export function createQueryRoutes(queryService: QueryService): Hono {
         { code: "invalid-argument", message: "Invalid collection path" },
         400,
       );
+    }
+
+    if (indexManager) {
+      const validation = indexManager.validateQuery(body.collectionPath, body.constraints ?? []);
+      if (!validation.valid) {
+        return c.json<ErrorResponse>(
+          {
+            code: "failed-precondition",
+            message: validation.message ?? "Missing composite index",
+          },
+          400,
+        );
+      }
     }
 
     const results = queryService.executeQuery(
@@ -57,6 +71,19 @@ export function createQueryRoutes(queryService: QueryService): Hono {
         { code: "invalid-argument", message: "aggregateSpec must have at least one field" },
         400,
       );
+    }
+
+    if (indexManager) {
+      const validation = indexManager.validateQuery(body.collectionPath, body.constraints ?? []);
+      if (!validation.valid) {
+        return c.json<ErrorResponse>(
+          {
+            code: "failed-precondition",
+            message: validation.message ?? "Missing composite index",
+          },
+          400,
+        );
+      }
     }
 
     const data = queryService.executeAggregate(

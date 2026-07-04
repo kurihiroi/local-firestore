@@ -4,6 +4,11 @@ export type { LogEntry, LogLevel, LogOutput } from "./middleware/logger.js";
 export { ConsoleLogOutput, JsonLogOutput, Logger, requestLogger } from "./middleware/logger.js";
 export type { ServerMetrics } from "./middleware/metrics.js";
 export { MetricsCollector, metricsMiddleware } from "./middleware/metrics.js";
+export type {
+  RegisterTriggerRequest,
+  RegisterTriggerResponse,
+} from "./routes/triggers.js";
+export { createTriggerRoutes } from "./routes/triggers.js";
 export type { AuthProvider } from "./security/auth-provider.js";
 export { LocalAuthProvider } from "./security/auth-provider.js";
 export { FirebaseAuthProvider } from "./security/firebase-auth-provider.js";
@@ -39,10 +44,15 @@ export {
   TransactionNotFoundError,
   TransactionService,
 } from "./services/transaction.js";
-export type { TriggerEvent, TriggerEventType, TriggerHandler } from "./services/trigger.js";
+export type {
+  TriggerEvent,
+  TriggerEventType,
+  TriggerHandler,
+  TriggerInfo,
+} from "./services/trigger.js";
 export { TriggerService } from "./services/trigger.js";
 export type { TtlCleanupResult, TtlPolicy } from "./services/ttl.js";
-export { TtlService } from "./services/ttl.js";
+export { matchesCollectionPattern, TtlService } from "./services/ttl.js";
 export { DocumentRepository } from "./storage/repository.js";
 export { createDatabase } from "./storage/sqlite.js";
 export type { TlsOptions } from "./tls.js";

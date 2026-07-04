@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type {
   SerializedOrderByConstraint,
   SerializedQueryConstraint,
@@ -48,6 +49,25 @@ export class IndexManager {
   /** インデックス設定を読み込む */
   loadConfiguration(config: IndexConfiguration): void {
     this.indexes = config.indexes;
+  }
+
+  /** firestore.indexes.json ファイルからインデックス設定を読み込む */
+  loadConfigurationFromFile(filePath: string): void {
+    const raw = readFileSync(filePath, "utf-8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`Failed to parse index configuration file "${filePath}": ${String(err)}`);
+    }
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !Array.isArray((parsed as IndexConfiguration).indexes)
+    ) {
+      throw new Error(`Invalid index configuration file "${filePath}": "indexes" must be an array`);
+    }
+    this.loadConfiguration(parsed as IndexConfiguration);
   }
 
   /** バリデーションモードを設定する */

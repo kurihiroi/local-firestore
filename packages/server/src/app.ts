@@ -8,10 +8,12 @@ import { createBatchRoutes } from "./routes/batch.js";
 import { createDataRoutes } from "./routes/data.js";
 import { createDocumentRoutes } from "./routes/documents.js";
 import { createQueryRoutes } from "./routes/query.js";
+import { createTriggerRoutes } from "./routes/triggers.js";
 import type { AuthProvider } from "./security/auth-provider.js";
 import type { SecurityRulesEngine } from "./security/rules-engine.js";
 import { securityRulesMiddleware } from "./security/rules-middleware.js";
 import { DocumentService } from "./services/document.js";
+import type { IndexManager } from "./services/index-manager.js";
 import type { ListenerManager } from "./services/listener-manager.js";
 import { QueryService } from "./services/query.js";
 import { TransactionService } from "./services/transaction.js";
@@ -24,6 +26,7 @@ export interface AppOptions {
   securityRules?: SecurityRulesEngine;
   authProvider?: AuthProvider;
   triggerService?: TriggerService;
+  indexManager?: IndexManager;
 }
 
 export function createApp(
@@ -96,7 +99,12 @@ export function createApp(
   app.route("/", createDocumentRoutes(documentService, onDocumentChange));
 
   // クエリルート
-  app.route("/", createQueryRoutes(queryService));
+  app.route("/", createQueryRoutes(queryService, options?.indexManager));
+
+  // トリガー登録ルート
+  if (triggerService) {
+    app.route("/", createTriggerRoutes(triggerService));
+  }
 
   // バッチ・トランザクションルート
   app.route("/", createBatchRoutes(transactionService, onDocumentChange));

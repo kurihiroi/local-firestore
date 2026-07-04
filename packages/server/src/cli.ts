@@ -6,8 +6,13 @@ import { JsonLogOutput, Logger } from "./middleware/logger.js";
 import type { AuthProvider } from "./security/auth-provider.js";
 import { LocalAuthProvider } from "./security/auth-provider.js";
 import { DocumentService } from "./services/document.js";
+import type { IndexValidationMode } from "./services/index-manager.js";
+import { IndexManager } from "./services/index-manager.js";
 import { ListenerManager } from "./services/listener-manager.js";
 import { QueryService } from "./services/query.js";
+import { TriggerService } from "./services/trigger.js";
+import type { TtlPolicy } from "./services/ttl.js";
+import { matchesCollectionPattern, TtlService } from "./services/ttl.js";
 import { DocumentRepository } from "./storage/repository.js";
 import { createDatabase } from "./storage/sqlite.js";
 import { createTlsServer, getTlsOptionsFromEnv } from "./tls.js";
@@ -24,6 +29,62 @@ async function createAuthProvider(logger: Logger): Promise<AuthProvider> {
   }
   logger.info("Using Local Auth provider");
   return new LocalAuthProvider();
+}
+
+function createIndexManager(logger: Logger): IndexManager | undefined {
+  const indexesPath = process.env.INDEXES_PATH;
+  if (!indexesPath) return undefined;
+
+  const mode = (process.env.INDEX_VALIDATION_MODE || "warn") as IndexValidationMode;
+  const indexManager = new IndexManager(mode);
+  indexManager.loadConfigurationFromFile(indexesPath);
+  logger.info("Index validation enabled", { indexesPath, mode, indexes: indexManager.size });
+  return indexManager;
+}
+
+function startTtlService(
+  logger: Logger,
+  repo: DocumentRepository,
+  documentService: DocumentService,
+  listenerManager: ListenerManager,
+  triggerService: TriggerService,
+): TtlService | undefined {
+  const policiesEnv = process.env.TTL_POLICIES;
+  if (!policiesEnv) return undefined;
+
+  let policies: TtlPolicy[];
+  try {
+    const parsed: unknown = JSON.parse(policiesEnv);
+    if (!Array.isArray(parsed)) {
+      throw new Error("TTL_POLICIES must be a JSON array");
+    }
+    policies = parsed as TtlPolicy[];
+  } catch (err) {
+    throw new Error(`Failed to parse TTL_POLICIES: ${String(err)}`);
+  }
+
+  const ttlService = new TtlService(
+    documentService,
+    (collectionPath) =>
+      collectionPath.includes("{")
+        ? repo.listAll().filter((d) => matchesCollectionPattern(d.collectionPath, collectionPath))
+        : repo.listCollection(collectionPath),
+    (path, oldDocument) => {
+      // 削除をリスナーとトリガーへ通知する
+      listenerManager.notifyChange(path, (p) => documentService.getDocument(p));
+      triggerService.notifyChange(path, oldDocument, undefined).catch((err) => {
+        logger.error("TTL trigger execution error", { path, error: String(err) });
+      });
+    },
+  );
+  for (const policy of policies) {
+    ttlService.addPolicy(policy);
+  }
+
+  const intervalMs = Number(process.env.TTL_INTERVAL_MS) || 60_000;
+  ttlService.start(intervalMs);
+  logger.info("TTL service started", { policies: ttlService.policyCount, intervalMs });
+  return ttlService;
 }
 
 async function main() {
@@ -46,7 +107,21 @@ async function main() {
 
   const authProvider = await createAuthProvider(logger);
 
-  const app = createApp(db, listenerManager, { logger, authProvider });
+  // Cloud Functions トリガー（POST /triggers で Webhook 登録可能）
+  const triggerService = new TriggerService();
+
+  // 複合インデックスのバリデーション（INDEXES_PATH 指定時のみ有効）
+  const indexManager = createIndexManager(logger);
+
+  const app = createApp(db, listenerManager, {
+    logger,
+    authProvider,
+    triggerService,
+    indexManager,
+  });
+
+  // TTL による期限切れドキュメントの自動削除（TTL_POLICIES 指定時のみ有効）
+  startTtlService(logger, repo, documentService, listenerManager, triggerService);
 
   logger.info("Local Firestore server starting", { port, dbPath, logLevel, tls: !!tlsOptions });
 

@@ -1,4 +1,5 @@
 import type { ServerMessage } from "@local-firestore/shared";
+import { logDebug, logError } from "./logger.js";
 import type { Firestore } from "./types.js";
 
 /** WebSocket readyState: OPEN */
@@ -112,7 +113,8 @@ export class ConnectionManager {
     };
 
     this.ws.onerror = () => {
-      // onclose が続けて呼ばれるのでここでは何もしない
+      // onclose が続けて呼ばれるので再接続処理はしない
+      logError(`WebSocket error: ${this.wsUrl}`);
     };
 
     this.ws.onmessage = (event) => {
@@ -188,6 +190,7 @@ export class ConnectionManager {
 
   private setState(newState: ConnectionState): void {
     if (this.state === newState) return;
+    logDebug(`Connection state: ${this.state} -> ${newState}`);
     this.state = newState;
     for (const listener of this.stateListeners) {
       listener(newState);
@@ -205,6 +208,7 @@ export class ConnectionManager {
       this.options.maxDelay,
     );
     this.retryCount++;
+    logDebug(`Reconnecting in ${delay}ms (attempt ${this.retryCount})`);
 
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
