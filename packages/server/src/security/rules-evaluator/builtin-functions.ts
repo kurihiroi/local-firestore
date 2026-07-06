@@ -1,5 +1,6 @@
+import { documentValueToRulesValue } from "./special-types.js";
 import type { RulesValue } from "./types.js";
-import { mkBool, mkNull, toRulesValue } from "./types.js";
+import { mkBool, mkNull } from "./types.js";
 
 /**
  * ドキュメント取得関数の型
@@ -79,6 +80,6 @@ export class BuiltinFunctionContext {
 
     const data = this.resolver.getDocument(path);
     if (data === null) return null;
-    return toRulesValue(data);
+    return documentValueToRulesValue(data);
   }
 }

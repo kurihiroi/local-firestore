@@ -255,6 +255,148 @@ describe("securityRulesMiddleware", () => {
     });
   });
 
+  describe("per-document list evaluation (rules are not filters)", () => {
+    const engine = new SecurityRulesEngine({
+      rules: {
+        posts: {
+          get: true,
+          list: "resource.data.visibility == 'public'",
+          write: true,
+        },
+      },
+    });
+
+    async function seedPosts(app: ReturnType<typeof createApp>) {
+      await request(app, "PUT", "/docs/posts/pub1", {
+        body: { data: { visibility: "public", title: "A" } },
+      });
+      await request(app, "PUT", "/docs/posts/priv1", {
+        body: { data: { visibility: "private", title: "B" } },
+      });
+    }
+
+    it("should deny the whole query when results include a denied document", async () => {
+      const app = createTestAppWithRules(engine);
+      await seedPosts(app);
+
+      // フィルタなしのクエリは private ドキュメントを含むため全体が拒否される
+      const res = await request(app, "POST", "/query", {
+        body: { collectionPath: "posts", constraints: [] },
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.code).toBe("permission-denied");
+    });
+
+    it("should allow a query constrained to satisfying documents", async () => {
+      const app = createTestAppWithRules(engine);
+      await seedPosts(app);
+
+      const res = await request(app, "POST", "/query", {
+        body: {
+          collectionPath: "posts",
+          constraints: [{ type: "where", fieldPath: "visibility", op: "==", value: "public" }],
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].path).toBe("posts/pub1");
+    });
+
+    it("should apply per-document evaluation to /aggregate", async () => {
+      const app = createTestAppWithRules(engine);
+      await seedPosts(app);
+
+      const deniedRes = await request(app, "POST", "/aggregate", {
+        body: {
+          collectionPath: "posts",
+          constraints: [],
+          aggregateSpec: { total: { aggregateType: "count" } },
+        },
+      });
+      expect(deniedRes.status).toBe(403);
+
+      const allowedRes = await request(app, "POST", "/aggregate", {
+        body: {
+          collectionPath: "posts",
+          constraints: [{ type: "where", fieldPath: "visibility", op: "==", value: "public" }],
+          aggregateSpec: { total: { aggregateType: "count" } },
+        },
+      });
+      expect(allowedRes.status).toBe(200);
+    });
+
+    it("should deny empty-result queries when rule requires resource", async () => {
+      const app = createTestAppWithRules(engine);
+      // ドキュメントなし: コレクションレベルで1回評価され、resource == null で
+      // 評価エラー → 拒否（本家同様）
+      const res = await request(app, "POST", "/query", {
+        body: { collectionPath: "posts", constraints: [] },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("should bind request.query.limit for list rules", async () => {
+      const limitEngine = new SecurityRulesEngine({
+        rules: {
+          limited: {
+            get: true,
+            write: true,
+            list: "request.query.limit != null && request.query.limit <= 10",
+          },
+        },
+      });
+      const app = createTestAppWithRules(limitEngine);
+      await request(app, "PUT", "/docs/limited/doc1", { body: { data: { v: 1 } } });
+
+      const noLimit = await request(app, "POST", "/query", {
+        body: { collectionPath: "limited", constraints: [] },
+      });
+      expect(noLimit.status).toBe(403);
+
+      const withinLimit = await request(app, "POST", "/query", {
+        body: { collectionPath: "limited", constraints: [{ type: "limit", limit: 5 }] },
+      });
+      expect(withinLimit.status).toBe(200);
+
+      const overLimit = await request(app, "POST", "/query", {
+        body: { collectionPath: "limited", constraints: [{ type: "limit", limit: 100 }] },
+      });
+      expect(overLimit.status).toBe(403);
+    });
+
+    it("should evaluate collection group queries against real document paths", async () => {
+      const groupEngine = new SecurityRulesEngine({
+        rules: {
+          "{path=**}": {
+            subcollections: {
+              comments: { list: "resource.data.visibility == 'public'", get: true, write: true },
+            },
+          },
+          posts: { read: true, write: true },
+        },
+      });
+      const app = createTestAppWithRules(groupEngine);
+      await request(app, "PUT", "/docs/posts/p1/comments/c1", {
+        body: { data: { visibility: "public" } },
+      });
+
+      const allowed = await request(app, "POST", "/query", {
+        body: { collectionPath: "comments", collectionGroup: true, constraints: [] },
+      });
+      expect(allowed.status).toBe(200);
+
+      await request(app, "PUT", "/docs/posts/p2/comments/c2", {
+        body: { data: { visibility: "private" } },
+      });
+      const denied = await request(app, "POST", "/query", {
+        body: { collectionPath: "comments", collectionGroup: true, constraints: [] },
+      });
+      expect(denied.status).toBe(403);
+    });
+  });
+
   describe("batch rules", () => {
     const engine = new SecurityRulesEngine(createAuthRequiredRules());
 

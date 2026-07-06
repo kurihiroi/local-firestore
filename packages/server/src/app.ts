@@ -123,7 +123,12 @@ function buildDatabaseApp(
   if (options?.securityRules && options?.authProvider) {
     app.use(
       "*",
-      securityRulesMiddleware(options.securityRules, options.authProvider, documentService),
+      securityRulesMiddleware(
+        options.securityRules,
+        options.authProvider,
+        documentService,
+        queryService,
+      ),
     );
   }
 

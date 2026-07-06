@@ -231,6 +231,96 @@ describe("ListenerManager", () => {
     });
   });
 
+  describe("クエリリスナーのセキュリティルールガード", () => {
+    /** visibility != 'public' のドキュメントがあれば拒否するガード */
+    const publicOnlyGuard = (docs: { path: string; data: Record<string, unknown> }[]) => {
+      const denied = docs.find((d) => d.data.visibility !== "public");
+      return denied ? `Permission denied (path: ${denied.path})` : null;
+    };
+
+    it("初回スナップショットで拒否された場合はエラーを送信し購読しない", () => {
+      const { manager, docService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("posts/pub", { visibility: "public" });
+      docService.setDocument("posts/priv", { visibility: "private" });
+
+      manager.subscribeQuery(ws, "sub1", "posts", false, [], publicOnlyGuard);
+
+      expect(ws.send).toHaveBeenCalledTimes(1);
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as string);
+      expect(msg.type).toBe("error");
+      expect(msg.code).toBe("permission-denied");
+      expect(manager.size).toBe(0);
+
+      // 購読されていないため変更通知も送られない
+      docService.setDocument("posts/pub2", { visibility: "public" });
+      manager.notifyChange("posts/pub2", getDoc);
+      expect(ws.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("全ドキュメントが許可される場合は通常どおり購読される", () => {
+      const { manager, docService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("posts/pub", { visibility: "public" });
+      manager.subscribeQuery(ws, "sub1", "posts", false, [], publicOnlyGuard);
+
+      const initial = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as string);
+      expect(initial.type).toBe("query_snapshot");
+      expect(initial.docs).toHaveLength(1);
+
+      // 許可されるドキュメントの追加は通知される
+      docService.setDocument("posts/pub2", { visibility: "public" });
+      manager.notifyChange("posts/pub2", getDoc);
+      expect(ws.send).toHaveBeenCalledTimes(2);
+      const update = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(update.type).toBe("query_snapshot");
+      expect(update.docs).toHaveLength(2);
+    });
+
+    it("変更通知で拒否に転じた場合はエラーを送信して購読を終了する", () => {
+      const { manager, docService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("posts/pub", { visibility: "public" });
+      manager.subscribeQuery(ws, "sub1", "posts", false, [], publicOnlyGuard);
+      expect(manager.size).toBe(1);
+
+      // 拒否対象のドキュメントが追加される → エラー送信 + 購読終了
+      docService.setDocument("posts/priv", { visibility: "private" });
+      manager.notifyChange("posts/priv", getDoc);
+
+      expect(ws.send).toHaveBeenCalledTimes(2);
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.type).toBe("error");
+      expect(msg.code).toBe("permission-denied");
+      expect(manager.size).toBe(0);
+
+      // 以降の変更は通知されない
+      docService.setDocument("posts/pub2", { visibility: "public" });
+      manager.notifyChange("posts/pub2", getDoc);
+      expect(ws.send).toHaveBeenCalledTimes(2);
+    });
+
+    it("ドキュメント削除（removed のみの変更）ではガードを評価しない", () => {
+      const { manager, docService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("posts/pub", { visibility: "public" });
+      manager.subscribeQuery(ws, "sub1", "posts", false, [], publicOnlyGuard);
+
+      docService.deleteDocument("posts/pub");
+      manager.notifyChange("posts/pub", getDoc);
+
+      expect(ws.send).toHaveBeenCalledTimes(2);
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.type).toBe("query_snapshot");
+      expect(msg.docs).toHaveLength(0);
+      expect(manager.size).toBe(1);
+    });
+  });
+
   describe("接続管理", () => {
     it("removeConnectionで全サブスクリプションが解除される", () => {
       const { manager, docService, getDoc } = setupTestEnv();

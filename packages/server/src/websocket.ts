@@ -8,9 +8,9 @@ import type {
 } from "@local-firestore/shared";
 import { WebSocketServer } from "ws";
 import type { AuthProvider } from "./security/auth-provider.js";
-import type { SecurityRulesEngine } from "./security/rules-engine.js";
+import { extractQueryParams, type SecurityRulesEngine } from "./security/rules-engine.js";
 import { DEFAULT_DATABASE_ID } from "./services/database-manager.js";
-import type { ListenerManager } from "./services/listener-manager.js";
+import type { ListenerManager, QueryRulesGuard } from "./services/listener-manager.js";
 import { isDocumentPath, parseDocumentPath } from "./utils/path.js";
 
 /** データベースごとのリスナー処理に必要な依存 */
@@ -42,48 +42,82 @@ function toAuthHeader(authToken: string | undefined): string | undefined {
 }
 
 /**
- * サブスクリプションに対するセキュリティルール評価。
+ * ドキュメントサブスクリプションに対するセキュリティルール評価。
  * 許可された場合は null、拒否された場合は理由文字列を返す。
  */
-async function evaluateSubscription(
+async function evaluateDocSubscription(
   deps: WebSocketDeps,
   target: DatabaseListenerDeps,
-  msg: SubscribeDocMessage | SubscribeQueryMessage,
+  msg: SubscribeDocMessage,
 ): Promise<string | null> {
   if (!deps.securityRules || !deps.authProvider) return null;
 
   const auth = await deps.authProvider.extractAuth(toAuthHeader(msg.authToken));
 
-  if (msg.type === "subscribe_doc") {
-    let collectionPath: string;
-    let documentId: string;
-    if (isDocumentPath(msg.path)) {
-      const parsed = parseDocumentPath(msg.path);
-      collectionPath = parsed.collectionPath;
-      documentId = parsed.documentId;
-    } else {
-      collectionPath = msg.path;
-      documentId = "";
-    }
-    const result = deps.securityRules.evaluate("get", {
-      auth,
-      path: msg.path,
-      documentId,
-      collectionPath,
-      existingData: target.getDocument(msg.path)?.data,
-      requestTime: new Date(),
-    });
-    return result.allowed ? null : (result.reason ?? "Permission denied by security rules");
+  let collectionPath: string;
+  let documentId: string;
+  if (isDocumentPath(msg.path)) {
+    const parsed = parseDocumentPath(msg.path);
+    collectionPath = parsed.collectionPath;
+    documentId = parsed.documentId;
+  } else {
+    collectionPath = msg.path;
+    documentId = "";
   }
-
-  const result = deps.securityRules.evaluate("list", {
+  const result = deps.securityRules.evaluate("get", {
     auth,
-    path: msg.collectionPath,
-    documentId: "",
-    collectionPath: msg.collectionPath,
+    path: msg.path,
+    documentId,
+    collectionPath,
+    existingData: target.getDocument(msg.path)?.data,
     requestTime: new Date(),
   });
   return result.allowed ? null : (result.reason ?? "Permission denied by security rules");
+}
+
+/**
+ * クエリサブスクリプションに対するセキュリティルール評価の準備。
+ *
+ * - ルールが resource / documentId を参照しない場合はこの場で1回評価し、
+ *   拒否なら理由文字列を返す（ガード不要）
+ * - per-document 評価が必要な場合は、スナップショットのドキュメント群を評価する
+ *   ガード関数を返す。初回スナップショットと以降の追加・変更ドキュメントに対して
+ *   ListenerManager から呼び出され、拒否に転じた場合は購読が終了する
+ */
+async function prepareQuerySubscription(
+  deps: WebSocketDeps,
+  msg: SubscribeQueryMessage,
+): Promise<{ deniedReason: string | null; guard?: QueryRulesGuard }> {
+  if (!deps.securityRules || !deps.authProvider) return { deniedReason: null };
+
+  const engine = deps.securityRules;
+  const auth = await deps.authProvider.extractAuth(toAuthHeader(msg.authToken));
+  const collectionPath = msg.collectionPath;
+  const collectionGroup = msg.collectionGroup ?? false;
+  const queryParams = extractQueryParams(msg.constraints);
+
+  if (engine.needsPerDocumentListEvaluation(collectionPath, collectionGroup)) {
+    const guard: QueryRulesGuard = (docs) => {
+      const result = engine.evaluateListQuery(
+        { auth, collectionPath, collectionGroup, queryParams, requestTime: new Date() },
+        docs,
+      );
+      return result.allowed ? null : (result.reason ?? "Permission denied by security rules");
+    };
+    return { deniedReason: null, guard };
+  }
+
+  const result = engine.evaluate("list", {
+    auth,
+    path: collectionPath,
+    documentId: "",
+    collectionPath,
+    requestTime: new Date(),
+    queryParams,
+  });
+  return {
+    deniedReason: result.allowed ? null : (result.reason ?? "Permission denied by security rules"),
+  };
 }
 
 /**
@@ -132,7 +166,7 @@ export function attachWebSocket(server: HttpServer, deps: WebSocketDeps): WebSoc
             sendError(msg.subscriptionId, `Unknown database: "${msg.databaseId}"`);
             return;
           }
-          const deniedReason = await evaluateSubscription(deps, target, msg);
+          const deniedReason = await evaluateDocSubscription(deps, target, msg);
           if (deniedReason !== null) {
             sendError(msg.subscriptionId, deniedReason, "permission-denied");
             return;
@@ -147,7 +181,7 @@ export function attachWebSocket(server: HttpServer, deps: WebSocketDeps): WebSoc
             sendError(msg.subscriptionId, `Unknown database: "${msg.databaseId}"`);
             return;
           }
-          const deniedReason = await evaluateSubscription(deps, target, msg);
+          const { deniedReason, guard } = await prepareQuerySubscription(deps, msg);
           if (deniedReason !== null) {
             sendError(msg.subscriptionId, deniedReason, "permission-denied");
             return;
@@ -159,6 +193,7 @@ export function attachWebSocket(server: HttpServer, deps: WebSocketDeps): WebSoc
             msg.collectionPath,
             msg.collectionGroup ?? false,
             msg.constraints,
+            guard,
           );
           break;
         }

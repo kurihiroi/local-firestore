@@ -8,6 +8,13 @@ import type {
 import type { WebSocket } from "ws";
 import type { QueryService } from "./query.js";
 
+/**
+ * クエリサブスクリプションに対するセキュリティルールガード。
+ * 渡されたドキュメント群を list ルールで評価し、
+ * 許可なら null、拒否なら理由文字列を返す。
+ */
+export type QueryRulesGuard = (docs: QueryDocumentData[]) => string | null;
+
 /** ドキュメントサブスクリプション */
 interface DocSubscription {
   kind: "doc";
@@ -28,6 +35,8 @@ interface QuerySubscription {
   ws: WebSocket;
   /** 直前のドキュメントパス一覧（change判定用） */
   lastDocs: QueryDocumentData[];
+  /** セキュリティルールガード（per-document 評価が必要な場合のみ設定される） */
+  guard?: QueryRulesGuard;
 }
 
 type Subscription = DocSubscription | QuerySubscription;
@@ -71,8 +80,18 @@ export class ListenerManager {
     collectionPath: string,
     collectionGroup: boolean,
     constraints: SerializedQueryConstraint[],
+    guard?: QueryRulesGuard,
   ): void {
     const docs = this.executeQuery(collectionPath, constraints, collectionGroup);
+
+    // 初回スナップショットを per-document 評価し、拒否があれば購読を開始しない
+    if (guard) {
+      const deniedReason = guard(docs);
+      if (deniedReason !== null) {
+        this.sendPermissionDenied(ws, subscriptionId, deniedReason);
+        return;
+      }
+    }
 
     const changes: DocumentChangeData[] = docs.map((d, i) => ({
       type: "added" as DocumentChangeType,
@@ -92,6 +111,7 @@ export class ListenerManager {
       constraints,
       ws,
       lastDocs: docs,
+      guard,
     };
     this.subscriptions.set(subscriptionId, sub);
     this.trackWs(ws, subscriptionId);
@@ -153,6 +173,22 @@ export class ListenerManager {
           );
           const changes = this.computeChanges(sub.lastDocs, newDocs);
           if (changes.length > 0) {
+            // 追加・変更されたドキュメントをルール評価し、拒否に転じた場合は
+            // permission-denied を送って購読を終了する（本家と同じ挙動）
+            if (sub.guard) {
+              const changedPaths = new Set(
+                changes.filter((c) => c.type !== "removed").map((c) => c.path),
+              );
+              const docsToCheck = newDocs.filter((d) => changedPaths.has(d.path));
+              if (docsToCheck.length > 0) {
+                const deniedReason = sub.guard(docsToCheck);
+                if (deniedReason !== null) {
+                  this.unsubscribe(sub.subscriptionId);
+                  this.sendPermissionDenied(sub.ws, sub.subscriptionId, deniedReason);
+                  continue;
+                }
+              }
+            }
             sub.lastDocs = newDocs;
             this.sendQuerySnapshot(sub.ws, sub.subscriptionId, newDocs, changes);
           }
@@ -284,6 +320,18 @@ export class ListenerManager {
         data: doc?.data ?? null,
         createTime: doc?.createTime ?? null,
         updateTime: doc?.updateTime ?? null,
+      }),
+    );
+  }
+
+  private sendPermissionDenied(ws: WebSocket, subscriptionId: string, message: string): void {
+    if (ws.readyState !== 1 /* WebSocket.OPEN */) return;
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        subscriptionId,
+        code: "permission-denied",
+        message,
       }),
     );
   }
