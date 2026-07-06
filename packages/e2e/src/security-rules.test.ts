@@ -4,6 +4,8 @@ import {
   type FirestoreError,
   getFirestore,
   onSnapshot,
+  setDoc,
+  Timestamp,
   terminate,
 } from "@local-firestore/client";
 import type { SecurityRules } from "@local-firestore/server";
@@ -547,6 +549,175 @@ describe("E2E: Security rules", () => {
           );
         });
         expect(size).toBe(1);
+      } finally {
+        await terminate(db);
+      }
+    });
+  });
+
+  describe("per-document list evaluation (rules are not filters)", () => {
+    let ctx: TestContext;
+    const rules: SecurityRules = {
+      rules: {
+        posts: {
+          get: true,
+          list: "resource.data.visibility == 'public'",
+          write: true,
+        },
+        watched: {
+          get: true,
+          list: "resource.data.visibility == 'public'",
+          write: true,
+        },
+      },
+    };
+
+    beforeAll(async () => {
+      ctx = await startTestServer({ securityRules: rules });
+      await fetchWithAuth(ctx.port, "PUT", "/docs/posts/pub1", {
+        data: { visibility: "public", title: "A" },
+      });
+      await fetchWithAuth(ctx.port, "PUT", "/docs/posts/priv1", {
+        data: { visibility: "private", title: "B" },
+      });
+      // リスナーテスト用: 初回スナップショットが許可されるドキュメントを事前投入
+      await fetchWithAuth(ctx.port, "PUT", "/docs/watched/pub1", {
+        data: { visibility: "public" },
+      });
+    });
+
+    afterAll(async () => {
+      await ctx.cleanup();
+    });
+
+    it("should deny an unfiltered query that would include denied documents", async () => {
+      const res = await fetchWithAuth(ctx.port, "POST", "/query", {
+        collectionPath: "posts",
+        constraints: [],
+      });
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { code: string };
+      expect(body.code).toBe("permission-denied");
+    });
+
+    it("should allow a query constrained to satisfying documents", async () => {
+      const res = await fetchWithAuth(ctx.port, "POST", "/query", {
+        collectionPath: "posts",
+        constraints: [{ type: "where", fieldPath: "visibility", op: "==", value: "public" }],
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { docs: Array<{ path: string }> };
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].path).toBe("posts/pub1");
+    });
+
+    it("should apply the same evaluation to aggregate queries", async () => {
+      const denied = await fetchWithAuth(ctx.port, "POST", "/aggregate", {
+        collectionPath: "posts",
+        constraints: [],
+        aggregateSpec: { total: { aggregateType: "count" } },
+      });
+      expect(denied.status).toBe(403);
+
+      const allowed = await fetchWithAuth(ctx.port, "POST", "/aggregate", {
+        collectionPath: "posts",
+        constraints: [{ type: "where", fieldPath: "visibility", op: "==", value: "public" }],
+        aggregateSpec: { total: { aggregateType: "count" } },
+      });
+      expect(allowed.status).toBe(200);
+      const body = (await allowed.json()) as { data: { total: number } };
+      expect(body.data.total).toBe(1);
+    });
+
+    it("should terminate a query listener when a denied document enters the result set", async () => {
+      const db = getFirestore({ host: "localhost", port: ctx.port });
+      try {
+        const snapshotPaths: string[][] = [];
+        let writeTriggered = false;
+        const error = await new Promise<FirestoreError>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout: no error received")), 5000);
+          onSnapshot(
+            collection(db, "watched"),
+            (snap) => {
+              snapshotPaths.push(snap.docs.map((d) => d.ref.path));
+              // 初回スナップショット受信後、拒否対象のドキュメントを追加する
+              if (!writeTriggered) {
+                writeTriggered = true;
+                fetchWithAuth(ctx.port, "PUT", "/docs/watched/priv1", {
+                  data: { visibility: "private" },
+                }).catch(reject);
+              }
+            },
+            (err) => {
+              clearTimeout(timer);
+              resolve(err);
+            },
+          );
+        });
+        expect(error.code).toBe("permission-denied");
+        // 拒否対象のドキュメントは一度もリスナーに配信されない
+        expect(snapshotPaths.length).toBeGreaterThan(0);
+        for (const paths of snapshotPaths) {
+          expect(paths).toEqual(["watched/pub1"]);
+        }
+      } finally {
+        await terminate(db);
+      }
+    });
+  });
+
+  describe("special types in rules (timestamp round-trip)", () => {
+    let ctx: TestContext;
+    const rules: SecurityRules = {
+      rules: {
+        events: {
+          read: true,
+          create:
+            "request.resource.data.createdAt is timestamp && request.resource.data.createdAt <= request.time",
+          update: "resource.data.createdAt is timestamp",
+          delete: true,
+        },
+      },
+    };
+
+    beforeAll(async () => {
+      ctx = await startTestServer({ securityRules: rules });
+    });
+
+    afterAll(async () => {
+      await ctx.cleanup();
+    });
+
+    it("should evaluate client-written Timestamp fields as rule timestamps", async () => {
+      const db = getFirestore({ host: "localhost", port: ctx.port });
+      try {
+        const past = Timestamp.fromDate(new Date(Date.now() - 60_000));
+        // create: `is timestamp` + request.time との比較が成立する
+        await setDoc(doc(collection(db, "events"), "e1"), { createdAt: past });
+
+        // update: 保存済みデータの resource.data.createdAt が timestamp として評価される
+        await setDoc(doc(collection(db, "events"), "e1"), {
+          createdAt: past,
+          note: "updated",
+        });
+      } finally {
+        await terminate(db);
+      }
+    });
+
+    it("should deny writes that violate timestamp rules", async () => {
+      const db = getFirestore({ host: "localhost", port: ctx.port });
+      try {
+        // createdAt が timestamp でない → 拒否
+        await expect(
+          setDoc(doc(collection(db, "events"), "bad1"), { createdAt: "not-a-timestamp" }),
+        ).rejects.toMatchObject({ code: "permission-denied" });
+
+        // 未来の timestamp → request.time との比較で拒否
+        const future = Timestamp.fromDate(new Date(Date.now() + 60 * 60_000));
+        await expect(
+          setDoc(doc(collection(db, "events"), "bad2"), { createdAt: future }),
+        ).rejects.toMatchObject({ code: "permission-denied" });
       } finally {
         await terminate(db);
       }

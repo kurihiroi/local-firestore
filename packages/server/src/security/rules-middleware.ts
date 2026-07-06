@@ -9,13 +9,16 @@ import type {
 } from "@local-firestore/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import type { DocumentService } from "../services/document.js";
+import type { QueryService } from "../services/query.js";
 import { isDocumentPath, parseDocumentPath } from "../utils/path.js";
 import type { AuthProvider } from "./auth-provider.js";
-import type {
-  AuthContext,
-  Operation,
-  RuleEvaluationResult,
-  SecurityRulesEngine,
+import {
+  type AuthContext,
+  extractQueryParams,
+  type ListQueryDocument,
+  type Operation,
+  type RuleEvaluationResult,
+  type SecurityRulesEngine,
 } from "./rules-engine.js";
 
 /**
@@ -137,6 +140,7 @@ export function securityRulesMiddleware(
   engine: SecurityRulesEngine,
   authProvider: AuthProvider,
   documentService?: DocumentService,
+  queryService?: QueryService,
 ): MiddlewareHandler {
   return async (c, next) => {
     const reqPath = c.req.path;
@@ -144,6 +148,9 @@ export function securityRulesMiddleware(
     const requestTime = new Date();
 
     // クエリ / 集計: list オペレーションとして評価
+    // ルールが resource / documentId を参照する場合は per-document 評価を行い、
+    // 1件でも拒否があればクエリ全体を permission-denied にする（本家の
+    // 「ルールはフィルタではない」セマンティクスの実用近似）
     if ((reqPath === "/query" || reqPath === "/aggregate") && method === "POST") {
       let body: QueryRequest | AggregateRequest;
       try {
@@ -155,14 +162,33 @@ export function securityRulesMiddleware(
       if (!collectionPath) {
         return next();
       }
+      const collectionGroup = body.collectionGroup ?? false;
       const auth = await authProvider.extractAuth(c.req.header("Authorization"));
-      const result = engine.evaluate("list", {
-        auth,
-        path: collectionPath,
-        documentId: "",
-        collectionPath,
-        requestTime,
-      });
+      const queryParams = extractQueryParams(body.constraints);
+
+      let result: RuleEvaluationResult;
+      if (queryService && engine.needsPerDocumentListEvaluation(collectionPath, collectionGroup)) {
+        let docs: ListQueryDocument[];
+        try {
+          docs = queryService.executeQuery(collectionPath, body.constraints, collectionGroup);
+        } catch {
+          // クエリ自体が無効な場合はルートハンドラでエラーレスポンスを返す
+          return next();
+        }
+        result = engine.evaluateListQuery(
+          { auth, collectionPath, collectionGroup, requestTime, queryParams },
+          docs,
+        );
+      } else {
+        result = engine.evaluate("list", {
+          auth,
+          path: collectionPath,
+          documentId: "",
+          collectionPath,
+          requestTime,
+          queryParams,
+        });
+      }
       if (!result.allowed) {
         return denied(c, result);
       }

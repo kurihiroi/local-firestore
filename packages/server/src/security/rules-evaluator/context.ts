@@ -1,9 +1,9 @@
 import type { DocumentData } from "@local-firestore/shared";
 import type { AuthContext, Operation } from "../rules-engine.js";
+import { documentDataToRulesMap } from "./special-types.js";
 import {
   mkInt,
   mkMap,
-  mkMapFromObject,
   mkNull,
   mkPath,
   mkString,
@@ -78,7 +78,7 @@ function buildRequestObject(ctx: EvaluationContext): RulesMap {
 
   // request.resource
   if (ctx.requestData) {
-    const dataMap = mkMapFromObject(ctx.requestData);
+    const dataMap = documentDataToRulesMap(ctx.requestData);
     const resourceMap = new Map<string, RulesValue>();
     resourceMap.set("data", dataMap);
     resourceMap.set("id", mkString(ctx.documentId));
@@ -100,17 +100,18 @@ function buildRequestObject(ctx: EvaluationContext): RulesMap {
   map.set("method", mkString(ctx.operation));
 
   // request.query
+  // list 評価時は limit / offset / orderBy を常に束縛する（未指定は本家同様 null / 0）
   if (ctx.queryParams) {
     const queryMap = new Map<string, RulesValue>();
-    if (ctx.queryParams.limit !== undefined) {
-      queryMap.set("limit", mkInt(ctx.queryParams.limit));
-    }
-    if (ctx.queryParams.offset !== undefined) {
-      queryMap.set("offset", mkInt(ctx.queryParams.offset));
-    }
-    if (ctx.queryParams.orderBy !== undefined) {
-      queryMap.set("orderBy", mkString(ctx.queryParams.orderBy));
-    }
+    queryMap.set(
+      "limit",
+      ctx.queryParams.limit !== undefined ? mkInt(ctx.queryParams.limit) : mkNull(),
+    );
+    queryMap.set("offset", mkInt(ctx.queryParams.offset ?? 0));
+    queryMap.set(
+      "orderBy",
+      ctx.queryParams.orderBy !== undefined ? mkString(ctx.queryParams.orderBy) : mkNull(),
+    );
     map.set("query", mkMap(queryMap));
   }
 
@@ -123,7 +124,7 @@ function buildResourceObject(ctx: EvaluationContext): RulesValue {
   }
 
   const map = new Map<string, RulesValue>();
-  map.set("data", mkMapFromObject(ctx.existingData));
+  map.set("data", documentDataToRulesMap(ctx.existingData));
   map.set("id", mkString(ctx.documentId));
   map.set("__name__", mkString(`/databases/(default)/documents/${ctx.path}`));
   return mkMap(map);

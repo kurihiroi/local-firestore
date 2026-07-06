@@ -257,6 +257,268 @@ describe("SecurityRulesEngine", () => {
     });
   });
 
+  describe("recursive wildcard ({name=**})", () => {
+    const engine = new SecurityRulesEngine({
+      rules: {
+        "{path=**}": {
+          subcollections: {
+            comments: { read: true, write: "auth != null" },
+          },
+        },
+        users: { read: "auth != null", write: false },
+      },
+    });
+
+    it("should match multiple segments with recursive wildcard", () => {
+      // posts/p1/comments: {path=**} が "posts/p1" を消費して comments にマッチ
+      const result = engine.evaluate(
+        "get",
+        makeContext({
+          path: "posts/p1/comments/c1",
+          collectionPath: "posts/p1/comments",
+          documentId: "c1",
+        }),
+      );
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should match deeply nested paths", () => {
+      const result = engine.evaluate(
+        "get",
+        makeContext({
+          path: "a/b/c/d/comments/c1",
+          collectionPath: "a/b/c/d/comments",
+          documentId: "c1",
+        }),
+      );
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should match zero segments (rules_version 2 semantics)", () => {
+      // トップレベルの comments コレクションにもマッチする
+      const result = engine.evaluate(
+        "get",
+        makeContext({ path: "comments/c1", collectionPath: "comments", documentId: "c1" }),
+      );
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should bind consumed segments to the wildcard variable", () => {
+      const bindingEngine = new SecurityRulesEngine({
+        rules: {
+          "{path=**}": {
+            subcollections: {
+              comments: { read: "path == 'posts/p1'" },
+            },
+          },
+        },
+      });
+      expect(
+        bindingEngine.evaluate(
+          "get",
+          makeContext({
+            path: "posts/p1/comments/c1",
+            collectionPath: "posts/p1/comments",
+            documentId: "c1",
+          }),
+        ).allowed,
+      ).toBe(true);
+      expect(
+        bindingEngine.evaluate(
+          "get",
+          makeContext({
+            path: "posts/p2/comments/c1",
+            collectionPath: "posts/p2/comments",
+            documentId: "c1",
+          }),
+        ).allowed,
+      ).toBe(false);
+    });
+
+    it("should prefer exact match over recursive wildcard", () => {
+      // users は exact match のルール（write: false）が優先される
+      const result = engine.evaluate(
+        "create",
+        makeContext({ collectionPath: "users", auth: { uid: "u1" } }),
+      );
+      expect(result.allowed).toBe(false);
+    });
+
+    it("should match whole path as a leaf recursive wildcard", () => {
+      const catchAll = new SecurityRulesEngine({
+        rules: { "{document=**}": { read: true, write: false } },
+      });
+      expect(
+        catchAll.evaluate(
+          "get",
+          makeContext({
+            path: "a/b/c/d/e/f",
+            collectionPath: "a/b/c/d/e",
+            documentId: "f",
+          }),
+        ).allowed,
+      ).toBe(true);
+    });
+  });
+
+  describe("needsPerDocumentListEvaluation", () => {
+    it("should be false for boolean rules", () => {
+      const engine = new SecurityRulesEngine({ rules: { posts: { read: true } } });
+      expect(engine.needsPerDocumentListEvaluation("posts")).toBe(false);
+    });
+
+    it("should be false when rule does not reference resource", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { read: "request.auth != null" } },
+      });
+      expect(engine.needsPerDocumentListEvaluation("posts")).toBe(false);
+    });
+
+    it("should be false when only request.resource is referenced", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "request.auth != null", create: "request.resource.data.v == 1" } },
+      });
+      expect(engine.needsPerDocumentListEvaluation("posts")).toBe(false);
+    });
+
+    it("should be true when rule references resource", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { read: "resource.data.visibility == 'public'" } },
+      });
+      expect(engine.needsPerDocumentListEvaluation("posts")).toBe(true);
+    });
+
+    it("should be true when rule references documentId", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { read: "auth.uid == documentId" } },
+      });
+      expect(engine.needsPerDocumentListEvaluation("posts")).toBe(true);
+    });
+
+    it("should be true when custom function references resource", () => {
+      const engine = new SecurityRulesEngine({
+        rules: {
+          posts: {
+            functions: "function isPublic() { return resource.data.visibility == 'public'; }",
+            read: "isPublic()",
+          },
+        },
+      });
+      expect(engine.needsPerDocumentListEvaluation("posts")).toBe(true);
+    });
+
+    it("should be true for collection group queries", () => {
+      const engine = new SecurityRulesEngine({ rules: { posts: { read: true } } });
+      expect(engine.needsPerDocumentListEvaluation("posts", true)).toBe(true);
+    });
+
+    it("should be false when request.query is referenced without resource", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "request.query.limit != null && request.query.limit <= 10" } },
+      });
+      expect(engine.needsPerDocumentListEvaluation("posts")).toBe(false);
+    });
+  });
+
+  describe("evaluateListQuery (per-document evaluation)", () => {
+    const visibilityRules: SecurityRules = {
+      rules: {
+        posts: { list: "resource.data.visibility == 'public'", get: true, write: true },
+      },
+    };
+
+    it("should allow when all documents satisfy the rule", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      const result = engine.evaluateListQuery({ auth: null, collectionPath: "posts" }, [
+        { path: "posts/p1", data: { visibility: "public" } },
+        { path: "posts/p2", data: { visibility: "public" } },
+      ]);
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should deny the whole query when any document is denied", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      const result = engine.evaluateListQuery({ auth: null, collectionPath: "posts" }, [
+        { path: "posts/p1", data: { visibility: "public" } },
+        { path: "posts/p2", data: { visibility: "private" } },
+      ]);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("posts/p2");
+    });
+
+    it("should evaluate once at collection level for empty results", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      // resource == null のため評価エラーとなり拒否される（本家同様）
+      const result = engine.evaluateListQuery({ auth: null, collectionPath: "posts" }, []);
+      expect(result.allowed).toBe(false);
+    });
+
+    it("should shortcut to single evaluation when rule does not need documents", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { read: "auth != null" } },
+      });
+      expect(
+        engine.evaluateListQuery({ auth: { uid: "u1" }, collectionPath: "posts" }, [
+          { path: "posts/p1", data: {} },
+        ]).allowed,
+      ).toBe(true);
+      expect(
+        engine.evaluateListQuery({ auth: null, collectionPath: "posts" }, [
+          { path: "posts/p1", data: {} },
+        ]).allowed,
+      ).toBe(false);
+    });
+
+    it("should bind request.query for list evaluation", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "request.query.limit != null && request.query.limit <= 10" } },
+      });
+      expect(
+        engine.evaluateListQuery(
+          { auth: null, collectionPath: "posts", queryParams: { limit: 5 } },
+          [],
+        ).allowed,
+      ).toBe(true);
+      expect(
+        engine.evaluateListQuery(
+          { auth: null, collectionPath: "posts", queryParams: { limit: 100 } },
+          [],
+        ).allowed,
+      ).toBe(false);
+      // limit 未指定は null 束縛 → 拒否
+      expect(
+        engine.evaluateListQuery({ auth: null, collectionPath: "posts", queryParams: {} }, [])
+          .allowed,
+      ).toBe(false);
+    });
+
+    it("should evaluate collection group documents against their real paths", () => {
+      const engine = new SecurityRulesEngine({
+        rules: {
+          "{path=**}": {
+            subcollections: {
+              comments: { list: "resource.data.visibility == 'public'" },
+            },
+          },
+        },
+      });
+      const allowed = engine.evaluateListQuery(
+        { auth: null, collectionPath: "comments", collectionGroup: true },
+        [
+          { path: "posts/p1/comments/c1", data: { visibility: "public" } },
+          { path: "articles/a1/comments/c2", data: { visibility: "public" } },
+        ],
+      );
+      expect(allowed.allowed).toBe(true);
+
+      const denied = engine.evaluateListQuery(
+        { auth: null, collectionPath: "comments", collectionGroup: true },
+        [{ path: "posts/p1/comments/c1", data: { visibility: "private" } }],
+      );
+      expect(denied.allowed).toBe(false);
+    });
+  });
+
   describe("preset rules", () => {
     it("createOpenRules should allow everything", () => {
       const engine = new SecurityRulesEngine(createOpenRules());
