@@ -5,6 +5,7 @@ import type {
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
+import { MAX_WRITE_OPERATIONS } from "@local-firestore/shared";
 import { serializeData } from "./serialization.js";
 import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
@@ -26,29 +27,46 @@ export class WriteBatch {
     }
   }
 
+  private ensureCapacity(): void {
+    // 本家のハードリミット（500 書き込み / バッチ）をクライアント側で早期検出する
+    if (this.operations.length >= MAX_WRITE_OPERATIONS) {
+      throw new FirestoreError(
+        "invalid-argument",
+        `A write batch can contain a maximum of ${MAX_WRITE_OPERATIONS} operations.`,
+      );
+    }
+  }
+
   set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this {
     this.ensureNotCommitted();
+    this.ensureCapacity();
     const dbData = ref._converter ? ref._converter.toFirestore(data) : data;
     this.operations.push({
       type: "set",
       path: ref.path,
-      data: serializeData(dbData as DocumentData),
+      data: serializeData(dbData as DocumentData, {
+        ignoreUndefinedProperties: this.firestore._ignoreUndefinedProperties ?? false,
+      }),
     });
     return this;
   }
 
   update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this {
     this.ensureNotCommitted();
+    this.ensureCapacity();
     this.operations.push({
       type: "update",
       path: ref.path,
-      data: serializeData(data as DocumentData),
+      data: serializeData(data as DocumentData, {
+        ignoreUndefinedProperties: this.firestore._ignoreUndefinedProperties ?? false,
+      }),
     });
     return this;
   }
 
   delete<T = DocumentData>(ref: DocumentReference<T>): this {
     this.ensureNotCommitted();
+    this.ensureCapacity();
     this.operations.push({
       type: "delete",
       path: ref.path,

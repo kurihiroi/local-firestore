@@ -30,6 +30,11 @@ export interface FirestoreSettings {
    * ```
    */
   authTokenProvider?: AuthTokenProvider;
+  /**
+   * true の場合、書き込みデータ内の undefined 値のプロパティを黙って除外する。
+   * デフォルト（false）では undefined 値は invalid-argument エラーになる（本家同様）。
+   */
+  ignoreUndefinedProperties?: boolean;
 }
 
 const DEFAULT_SETTINGS = {
@@ -48,7 +53,13 @@ const appFirestoreInstances = new WeakMap<object, Map<string, Firestore>>();
 function isFirestoreSettings(value: unknown): value is FirestoreSettings {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
-  return "host" in obj || "port" in obj || "ssl" in obj || "authTokenProvider" in obj;
+  return (
+    "host" in obj ||
+    "port" in obj ||
+    "ssl" in obj ||
+    "authTokenProvider" in obj ||
+    "ignoreUndefinedProperties" in obj
+  );
 }
 
 /**
@@ -124,6 +135,7 @@ function createFirestoreInstance(
     type: "firestore",
     _transport: transport,
     _databaseId: databaseId,
+    _ignoreUndefinedProperties: settings?.ignoreUndefinedProperties ?? false,
   } as Firestore;
 }
 

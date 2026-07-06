@@ -18,6 +18,7 @@ import {
   query,
   startAfter,
   startAt,
+  validateConstraints,
   where,
 } from "./query.js";
 import { collection, doc } from "./references.js";
@@ -377,5 +378,65 @@ describe("スナップショットカーソル (startAt(snapshot) 形式)", () =
   it("フィールド値の列挙による従来形式も引き続き動作する", () => {
     const q = query(usersRef, orderBy("age"), startAfter(30));
     expect(q.constraints[1]).toEqual({ type: "startAfter", values: [30] });
+  });
+});
+
+describe("validateConstraints（本家パリティのクエリバリデーション）", () => {
+  const db = getFirestore();
+  const usersRef = collection(db, "users");
+
+  function expectInvalid(constraints: Parameters<typeof validateConstraints>[0], match: string) {
+    try {
+      validateConstraints(constraints);
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(FirestoreError);
+      expect((e as FirestoreError).code).toBe("invalid-argument");
+      expect((e as FirestoreError).message).toContain(match);
+    }
+  }
+
+  it("in / array-contains-any の31要素以上はエラーになる", () => {
+    const values = Array.from({ length: 31 }, (_, i) => i);
+    const q = query(usersRef, where("age", "in", values));
+    expectInvalid(q.constraints, "maximum of 30");
+    const q2 = query(usersRef, where("tags", "array-contains-any", values));
+    expectInvalid(q2.constraints, "maximum of 30");
+  });
+
+  it("not-in の11要素以上はエラーになる", () => {
+    const values = Array.from({ length: 11 }, (_, i) => i);
+    const q = query(usersRef, where("age", "not-in", values));
+    expectInvalid(q.constraints, "maximum of 10");
+  });
+
+  it("in の空配列はエラーになる", () => {
+    const q = query(usersRef, where("age", "in", []));
+    expectInvalid(q.constraints, "non-empty array");
+  });
+
+  it("array-contains の複数指定はエラーになる", () => {
+    const q = query(usersRef, where("a", "array-contains", 1), where("b", "array-contains", 2));
+    expectInvalid(q.constraints, "more than one 'array-contains'");
+  });
+
+  it("not-in と != の併用はエラーになる", () => {
+    const q = query(usersRef, where("a", "not-in", [1]), where("b", "!=", 2));
+    expectInvalid(q.constraints, "'not-in' filters with '!='");
+  });
+
+  it("not-in と in の併用はエラーになる", () => {
+    const q = query(usersRef, where("a", "not-in", [1]), where("b", "in", [2]));
+    expectInvalid(q.constraints, "'not-in' filters with 'in'");
+  });
+
+  it("有効なクエリはエラーにならない", () => {
+    const q = query(
+      usersRef,
+      where("age", "in", [1, 2, 3]),
+      where("tags", "array-contains", "a"),
+      limit(10),
+    );
+    expect(() => validateConstraints(q.constraints)).not.toThrow();
   });
 });

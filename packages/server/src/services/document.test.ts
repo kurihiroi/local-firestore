@@ -1,3 +1,4 @@
+import { DocumentValidationError } from "@local-firestore/shared";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DocumentRepository } from "../storage/repository.js";
 import { createDatabase } from "../storage/sqlite.js";
@@ -143,6 +144,91 @@ describe("DocumentService", () => {
 
       const doc = service.getDocument("users/alice");
       expect(doc?.data.tags).toEqual(["a", "c"]);
+    });
+  });
+
+  describe("deleteField センチネル（プロトコル表現）", () => {
+    const deleteSentinel = { __fieldValue: true, type: "deleteField" } as const;
+
+    it("同じ文字列値 $$__DELETE__$$ の書き込みはフィールド削除にならない", () => {
+      // B-4: 旧文字列表現との衝突によるデータ破損リスクの回帰テスト
+      service.setDocument("users/alice", { name: "Alice", note: "$$__DELETE__$$" });
+      const doc = service.getDocument("users/alice");
+      expect(doc?.data.note).toBe("$$__DELETE__$$");
+
+      service.setDocument("users/alice", { note: "$$__DELETE__$$" }, { merge: true });
+      expect(service.getDocument("users/alice")?.data.note).toBe("$$__DELETE__$$");
+    });
+
+    it("merge set でネストしたフィールドを deleteField で削除できる", () => {
+      service.setDocument("users/alice", { profile: { age: 30, city: "Tokyo" } });
+      service.setDocument("users/alice", { profile: { age: deleteSentinel } }, { merge: true });
+
+      const doc = service.getDocument("users/alice");
+      expect(doc?.data.profile).toEqual({ city: "Tokyo" });
+    });
+
+    it("merge なしの set で deleteField はエラーになる", () => {
+      expect(() => service.setDocument("users/alice", { age: deleteSentinel })).toThrow(
+        DocumentValidationError,
+      );
+    });
+
+    it("addDocument で deleteField はエラーになる", () => {
+      expect(() => service.addDocument("users", { age: deleteSentinel })).toThrow(
+        DocumentValidationError,
+      );
+    });
+
+    it("update でネストしたマップ内の deleteField はエラーになる", () => {
+      service.setDocument("users/alice", { profile: { age: 30 } });
+      expect(() =>
+        service.updateDocument("users/alice", { profile: { age: deleteSentinel } }),
+      ).toThrow(DocumentValidationError);
+    });
+
+    it("update のドット記法パスで deleteField が使える", () => {
+      service.setDocument("users/alice", { profile: { age: 30, city: "Tokyo" } });
+      service.updateDocument("users/alice", { "profile.age": deleteSentinel });
+      expect(service.getDocument("users/alice")?.data.profile).toEqual({ city: "Tokyo" });
+    });
+
+    it("存在しないドキュメントへの merge set で deleteField は無視される", () => {
+      service.setDocument("users/new", { name: "New", gone: deleteSentinel }, { merge: true });
+      expect(service.getDocument("users/new")?.data).toEqual({ name: "New" });
+    });
+  });
+
+  describe("プラットフォームリミット（B-1）", () => {
+    it("1 MiB 超のドキュメントはエラーになる", () => {
+      const big = "x".repeat(1_048_576);
+      expect(() => service.setDocument("users/big", { data: big })).toThrow(
+        DocumentValidationError,
+      );
+    });
+
+    it("ネスト深度 20 超のドキュメントはエラーになる", () => {
+      let value: unknown = 1;
+      for (let i = 0; i < 21; i++) {
+        value = { nested: value };
+      }
+      expect(() => service.setDocument("users/deep", { deep: value })).toThrow(
+        DocumentValidationError,
+      );
+    });
+
+    it("予約フィールド名（__.*__）はエラーになる", () => {
+      expect(() => service.setDocument("users/reserved", { __name__: 1 })).toThrow(
+        DocumentValidationError,
+      );
+    });
+
+    it("update 結果がリミットを超える場合もエラーになる", () => {
+      service.setDocument("users/u1", { a: 1 });
+      const big = "x".repeat(1_048_576);
+      expect(() => service.updateDocument("users/u1", { data: big })).toThrow(
+        DocumentValidationError,
+      );
     });
   });
 });

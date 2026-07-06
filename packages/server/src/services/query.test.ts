@@ -657,4 +657,53 @@ describe("QueryService - Firestore互換セマンティクス", () => {
       expect(results.map((r) => r.documentId)).toEqual(["a"]);
     });
   });
+
+  describe("クエリフィルタの防御的バリデーション（B-2）", () => {
+    it("in の31要素以上は QueryValidationError になる", () => {
+      const values = Array.from({ length: 31 }, (_, i) => i);
+      expect(() =>
+        queryService.executeQuery("users", [
+          { type: "where", fieldPath: "age", op: "in", value: values },
+        ]),
+      ).toThrow(QueryValidationError);
+    });
+
+    it("not-in の11要素以上は QueryValidationError になる", () => {
+      const values = Array.from({ length: 11 }, (_, i) => i);
+      expect(() =>
+        queryService.executeQuery("users", [
+          { type: "where", fieldPath: "age", op: "not-in", value: values },
+        ]),
+      ).toThrow(QueryValidationError);
+    });
+
+    it("array-contains の複数指定は QueryValidationError になる", () => {
+      expect(() =>
+        queryService.executeQuery("users", [
+          { type: "where", fieldPath: "tags", op: "array-contains", value: "a" },
+          { type: "where", fieldPath: "tags", op: "array-contains", value: "b" },
+        ]),
+      ).toThrow(QueryValidationError);
+    });
+
+    it("not-in と != の併用は QueryValidationError になる", () => {
+      expect(() =>
+        queryService.executeQuery("users", [
+          { type: "where", fieldPath: "age", op: "not-in", value: [1] },
+          { type: "where", fieldPath: "name", op: "!=", value: "x" },
+        ]),
+      ).toThrow(QueryValidationError);
+    });
+
+    it("executeAggregate でも同じ検証が行われる", () => {
+      const values = Array.from({ length: 31 }, (_, i) => i);
+      expect(() =>
+        queryService.executeAggregate(
+          "users",
+          [{ type: "where", fieldPath: "age", op: "in", value: values }],
+          { total: { aggregateType: "count" } },
+        ),
+      ).toThrow(QueryValidationError);
+    });
+  });
 });

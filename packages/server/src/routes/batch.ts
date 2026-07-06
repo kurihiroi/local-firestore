@@ -9,6 +9,7 @@ import type {
   TransactionGetRequest,
   TransactionRollbackRequest,
 } from "@local-firestore/shared";
+import { DocumentValidationError, validateWriteOperationCount } from "@local-firestore/shared";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type { TransactionService } from "../services/transaction.js";
@@ -28,6 +29,7 @@ export function createBatchRoutes(
   app.post("/batch", async (c) => {
     const body = await c.req.json<BatchRequest>();
     try {
+      validateWriteOperationCount(body.operations.length);
       transactionService.executeBatch(body.operations);
       if (onDocumentChange) {
         for (const op of body.operations) {
@@ -68,6 +70,7 @@ export function createBatchRoutes(
   app.post("/transaction/commit", async (c) => {
     const body = await c.req.json<TransactionCommitRequest>();
     try {
+      validateWriteOperationCount(body.operations.length);
       transactionService.commit(body.transactionId, body.operations);
       if (onDocumentChange) {
         for (const op of body.operations) {
@@ -91,6 +94,9 @@ export function createBatchRoutes(
 }
 
 function handleError(c: Context, e: unknown) {
+  if (e instanceof DocumentValidationError) {
+    return c.json<ErrorResponse>({ code: e.code, message: e.message }, 400);
+  }
   if (e instanceof TransactionConflictError) {
     return c.json<ErrorResponse>({ code: e.code, message: e.message }, 409);
   }

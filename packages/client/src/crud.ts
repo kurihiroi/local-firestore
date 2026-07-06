@@ -12,7 +12,7 @@ import type {
 import { logDebug } from "./logger.js";
 import { getWriteQueue, isNetworkEnabled } from "./network-state.js";
 import { doc } from "./references.js";
-import { deserializeData, serializeData } from "./serialization.js";
+import { deserializeData, type SerializeOptions, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import type { CollectionReference, DocumentReference } from "./types.js";
 import { DocumentSnapshot, FieldPath } from "./types.js";
@@ -26,6 +26,11 @@ function generateAutoId(): string {
     id += AUTO_ID_ALPHABET[Math.floor(Math.random() * AUTO_ID_ALPHABET.length)];
   }
   return id;
+}
+
+/** Firestore インスタンスの設定からシリアライズオプションを構築する */
+function serializeOptionsOf(firestore: { _ignoreUndefinedProperties?: boolean }): SerializeOptions {
+  return { ignoreUndefinedProperties: firestore._ignoreUndefinedProperties ?? false };
 }
 
 /** ドキュメントを取得する */
@@ -74,7 +79,7 @@ export async function setDoc<T = DocumentData>(
       ? reference._converter.toFirestore(data as PartialWithFieldValue<T>, options)
       : reference._converter.toFirestore(data as WithFieldValue<T>)
     : data;
-  const dbData = serializeData(converted as DocumentData);
+  const dbData = serializeData(converted as DocumentData, serializeOptionsOf(reference._firestore));
   if (!isNetworkEnabled(reference._firestore)) {
     logDebug(`Network disabled, queueing set for ${reference.path}`);
     getWriteQueue(reference._firestore).enqueue(
@@ -96,7 +101,7 @@ export async function addDoc<T = DocumentData>(
 ): Promise<DocumentReference<T>> {
   const transport = reference._firestore._transport;
   const converted = reference._converter ? reference._converter.toFirestore(data) : data;
-  const dbData = serializeData(converted as DocumentData);
+  const dbData = serializeData(converted as DocumentData, serializeOptionsOf(reference._firestore));
   if (!isNetworkEnabled(reference._firestore)) {
     // オフライン時は ID をクライアント側で生成し、set としてキューする
     const documentId = generateAutoId();
@@ -155,7 +160,7 @@ export async function updateDoc<T = DocumentData>(
     raw = dataOrField as Record<string, unknown>;
   }
 
-  const data = serializeData(raw as DocumentData);
+  const data = serializeData(raw as DocumentData, serializeOptionsOf(reference._firestore));
 
   if (!isNetworkEnabled(reference._firestore)) {
     logDebug(`Network disabled, queueing update for ${reference.path}`);

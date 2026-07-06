@@ -25,6 +25,52 @@ describe("Batch & Transaction Routes", () => {
       expect(aliceBody.exists).toBe(true);
       expect(aliceBody.data!.name).toBe("Alice");
     });
+
+    it("500 オペレーション超のバッチは invalid-argument で拒否される", async () => {
+      const operations = Array.from({ length: 501 }, (_, i) => ({
+        type: "set",
+        path: `users/u${i}`,
+        data: { i },
+      }));
+      const res = await request(app, "POST", "/batch", { operations });
+      expect(res.status).toBe(400);
+      const body = await jsonBody<{ code: string }>(res);
+      expect(body.code).toBe("invalid-argument");
+
+      // 拒否されたバッチは一切書き込まれない
+      const check = await request(app, "GET", "/docs/users/u0");
+      const checkBody = await jsonBody<GetDocumentResponse>(check);
+      expect(checkBody.exists).toBe(false);
+    });
+
+    it("バッチ内のドキュメントがリミット違反なら invalid-argument になる", async () => {
+      const res = await request(app, "POST", "/batch", {
+        operations: [{ type: "set", path: "users/big", data: { v: "x".repeat(1_048_576) } }],
+      });
+      expect(res.status).toBe(400);
+      const body = await jsonBody<{ code: string }>(res);
+      expect(body.code).toBe("invalid-argument");
+    });
+  });
+
+  describe("POST /transaction/commit のリミット", () => {
+    it("500 オペレーション超のコミットは invalid-argument で拒否される", async () => {
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await jsonBody<TransactionBeginResponse>(beginRes);
+
+      const operations = Array.from({ length: 501 }, (_, i) => ({
+        type: "set",
+        path: `users/u${i}`,
+        data: { i },
+      }));
+      const res = await request(app, "POST", "/transaction/commit", {
+        transactionId,
+        operations,
+      });
+      expect(res.status).toBe(400);
+      const body = await jsonBody<{ code: string }>(res);
+      expect(body.code).toBe("invalid-argument");
+    });
   });
 
   describe("Transaction flow", () => {

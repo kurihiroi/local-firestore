@@ -1,3 +1,14 @@
+export {
+  calculateDocumentNameSize,
+  calculateDocumentSize,
+  calculateValueSize,
+  DocumentValidationError,
+  MAX_DOCUMENT_SIZE_BYTES,
+  MAX_NESTING_DEPTH,
+  MAX_WRITE_OPERATIONS,
+  validateDocumentWrite,
+  validateWriteOperationCount,
+} from "./limits.js";
 export type {
   AddDocumentRequest,
   AddDocumentResponse,
@@ -37,6 +48,11 @@ export type {
   UpdateDocumentRequest,
 } from "./protocol.js";
 export { isFieldValueSentinel } from "./protocol.js";
+export {
+  MAX_DISJUNCTION_VALUES,
+  MAX_NOT_IN_VALUES,
+  validateQueryFilters,
+} from "./query-validation.js";
 export type {
   AddPrefixToKeys,
   AggregateType,

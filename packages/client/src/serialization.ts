@@ -11,6 +11,7 @@ import { isFieldValueSentinel } from "@local-firestore/shared";
 import { Bytes } from "./bytes.js";
 import { GeoPoint } from "./geo-point.js";
 import { doc } from "./references.js";
+import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
 import { Timestamp } from "./types.js";
 import { VectorValue } from "./vector.js";
@@ -45,8 +46,27 @@ function isDocumentReference(value: unknown): value is DocumentReference {
   );
 }
 
+/** シリアライズ時のオプション */
+export interface SerializeOptions {
+  /**
+   * true の場合、undefined 値のフィールドを黙って除外する
+   * （本家 `FirestoreSettings.ignoreUndefinedProperties` 互換）。
+   * デフォルトは false で、undefined 値は invalid-argument エラーになる（本家同様）。
+   */
+  ignoreUndefinedProperties?: boolean;
+}
+
 /** 単一の値をワイヤ形式へ変換する（ネスト構造も再帰的に処理） */
-export function serializeValue(value: unknown): unknown {
+export function serializeValue(value: unknown, options?: SerializeOptions): unknown {
+  return serializeValueInternal(value, options ?? {}, "", false);
+}
+
+function serializeValueInternal(
+  value: unknown,
+  options: SerializeOptions,
+  fieldPath: string,
+  insideArray: boolean,
+): unknown {
   if (value === null || value === undefined) return value;
 
   if (value instanceof Timestamp) {
@@ -57,7 +77,7 @@ export function serializeValue(value: unknown): unknown {
     return serialized;
   }
   if (value instanceof Date) {
-    return serializeValue(Timestamp.fromDate(value));
+    return serializeValueInternal(Timestamp.fromDate(value), options, fieldPath, insideArray);
   }
   if (value instanceof GeoPoint) {
     return value.toSerialized();
@@ -73,30 +93,64 @@ export function serializeValue(value: unknown): unknown {
     return serialized;
   }
   if (isFieldValueSentinel(value)) {
+    // FieldValue センチネルは配列内では使用できない（本家同様）
+    if (insideArray) {
+      throw new FirestoreError(
+        "invalid-argument",
+        `${(value as FieldValueSentinel).type}() is not currently supported inside arrays${fieldPathSuffix(fieldPath)}`,
+      );
+    }
     // arrayUnion / arrayRemove の要素にも特殊型が含まれうる
     const sentinel = value as FieldValueSentinel;
     if (Array.isArray(sentinel.value)) {
-      return { ...sentinel, value: sentinel.value.map(serializeValue) };
+      return {
+        ...sentinel,
+        // arrayUnion / arrayRemove の要素は配列要素として扱う（センチネルのネスト禁止）
+        value: sentinel.value.map((v, i) =>
+          serializeValueInternal(v, options, `${fieldPath}[${i}]`, true),
+        ),
+      };
     }
     return sentinel;
   }
   if (Array.isArray(value)) {
-    return value.map(serializeValue);
+    return value.map((v, i) => {
+      if (v === undefined) {
+        // 配列内の undefined は ignoreUndefinedProperties でも許容されない（本家同様）
+        throw new FirestoreError(
+          "invalid-argument",
+          `Unsupported field value: undefined${fieldPathSuffix(`${fieldPath}[${i}]`)}`,
+        );
+      }
+      return serializeValueInternal(v, options, `${fieldPath}[${i}]`, true);
+    });
   }
   if (typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (v === undefined) continue; // 本家同様、undefined フィールドは書き込まない
-      result[k] = serializeValue(v);
+      const childPath = fieldPath ? `${fieldPath}.${k}` : k;
+      if (v === undefined) {
+        if (options.ignoreUndefinedProperties) continue;
+        throw new FirestoreError(
+          "invalid-argument",
+          `Unsupported field value: undefined (found in field ${childPath}). ` +
+            "Pass ignoreUndefinedProperties: true to getFirestore() settings to ignore undefined values.",
+        );
+      }
+      result[k] = serializeValueInternal(v, options, childPath, false);
     }
     return result;
   }
   return value;
 }
 
+function fieldPathSuffix(fieldPath: string): string {
+  return fieldPath ? ` (found in field ${fieldPath})` : "";
+}
+
 /** ドキュメントデータ全体をワイヤ形式へ変換する */
-export function serializeData(data: DocumentData): DocumentData {
-  return serializeValue(data) as DocumentData;
+export function serializeData(data: DocumentData, options?: SerializeOptions): DocumentData {
+  return serializeValue(data, options) as DocumentData;
 }
 
 /** ワイヤ形式の値をクラスインスタンスへ復元する */

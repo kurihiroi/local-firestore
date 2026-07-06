@@ -7,7 +7,7 @@ import type {
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
-import { ERROR_CODES } from "@local-firestore/shared";
+import { ERROR_CODES, MAX_WRITE_OPERATIONS } from "@local-firestore/shared";
 import { deserializeData, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
@@ -90,26 +90,43 @@ export class Transaction {
     return new DocumentSnapshot<T>(ref, data as T | null, res.createTime, res.updateTime);
   }
 
+  private ensureCapacity(): void {
+    // 本家のハードリミット（500 書き込み / トランザクション）をクライアント側で早期検出する
+    if (this.operations.length >= MAX_WRITE_OPERATIONS) {
+      throw new FirestoreError(
+        "invalid-argument",
+        `A transaction can contain a maximum of ${MAX_WRITE_OPERATIONS} write operations.`,
+      );
+    }
+  }
+
+  private serializeOptions() {
+    return { ignoreUndefinedProperties: this.firestore._ignoreUndefinedProperties ?? false };
+  }
+
   set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this {
+    this.ensureCapacity();
     const dbData = ref._converter ? ref._converter.toFirestore(data) : data;
     this.operations.push({
       type: "set",
       path: ref.path,
-      data: serializeData(dbData as DocumentData),
+      data: serializeData(dbData as DocumentData, this.serializeOptions()),
     });
     return this;
   }
 
   update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this {
+    this.ensureCapacity();
     this.operations.push({
       type: "update",
       path: ref.path,
-      data: serializeData(data as DocumentData),
+      data: serializeData(data as DocumentData, this.serializeOptions()),
     });
     return this;
   }
 
   delete<T = DocumentData>(ref: DocumentReference<T>): this {
+    this.ensureCapacity();
     this.operations.push({
       type: "delete",
       path: ref.path,
