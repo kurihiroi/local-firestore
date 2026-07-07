@@ -10,6 +10,7 @@ import type {
   SerializedQueryConstraint,
   SerializedWhereConstraint,
 } from "@local-firestore/shared";
+import { validateQueryFilters } from "@local-firestore/shared";
 import type Database from "better-sqlite3";
 import { nextTypeTag, TYPE_TAG, valueKey, valueTypeTag } from "../storage/firestore-key.js";
 
@@ -311,6 +312,12 @@ function buildFilterConditions(
   constraints: SerializedQueryConstraint[],
   collectionGroup: boolean,
 ): { conditions: string[]; params: unknown[] } {
+  // 本家がエラーにするフィルタ組合せ・要素数制限の防御的検証
+  const filterError = validateQueryFilters(constraints);
+  if (filterError !== null) {
+    throw new QueryValidationError(filterError);
+  }
+
   const wheres = constraints.filter((c): c is SerializedWhereConstraint => c.type === "where");
   const composites = constraints.filter(
     (c): c is SerializedCompositeFilterConstraint => c.type === "and" || c.type === "or",

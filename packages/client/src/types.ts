@@ -12,6 +12,8 @@ export interface Firestore {
   _transport: HttpTransport;
   /** @internal データベースID（マルチデータベース対応） */
   readonly _databaseId?: string;
+  /** @internal undefined 値のフィールドを黙って除外するか（FirestoreSettings 由来） */
+  readonly _ignoreUndefinedProperties?: boolean;
 }
 
 /** ドキュメントリファレンス */

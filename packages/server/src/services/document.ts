@@ -4,10 +4,47 @@ import type {
   FirestoreErrorCode,
   SetOptions,
 } from "@local-firestore/shared";
-import { isFieldValueSentinel } from "@local-firestore/shared";
+import {
+  DocumentValidationError,
+  isFieldValueSentinel,
+  validateDocumentWrite,
+} from "@local-firestore/shared";
 import type { DocumentRepository } from "../storage/repository.js";
 import { generateDocumentId } from "../utils/id.js";
 import { parseDocumentPath } from "../utils/path.js";
+
+/**
+ * deleteField センチネルのサーバー内部表現（プロトコルレベル）
+ *
+ * 以前は文字列 "$$__DELETE__$$" を使用していたが、同じ文字列値の書き込みと
+ * 衝突するため（意図しないフィールド削除 = データ破損リスク）、他の特殊型と
+ * 統一した `{__type: "delete"}` 形式に変更した。
+ */
+interface DeleteMarker {
+  __type: "delete";
+}
+
+const DELETE_MARKER: DeleteMarker = { __type: "delete" };
+
+/** 値が deleteField マーカーかどうか */
+function isDeleteMarker(value: unknown): value is DeleteMarker {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).__type === "delete"
+  );
+}
+
+/** deleteField マーカーが値の中に含まれるか（ネスト構造も検査） */
+function containsDeleteMarker(value: unknown): boolean {
+  if (isDeleteMarker(value)) return true;
+  if (Array.isArray(value)) return value.some(containsDeleteMarker);
+  if (isPlainObject(value) && !isSpecialValueWrapper(value)) {
+    return Object.values(value).some(containsDeleteMarker);
+  }
+  return false;
+}
 
 export class DocumentService {
   constructor(private repo: DocumentRepository) {}
@@ -20,6 +57,14 @@ export class DocumentService {
     const { collectionPath, documentId } = parseDocumentPath(path);
     const existing = this.repo.get(path);
     const resolvedData = this.resolveFieldValues(data, existing?.data);
+
+    const isMerge = options !== undefined && ("merge" in options || "mergeFields" in options);
+    if (!isMerge && containsDeleteMarker(resolvedData)) {
+      // 本家同様、deleteField() は update() または set() の merge オプション時のみ有効
+      throw new DocumentValidationError(
+        "deleteField() can only be used with update() or set() with {merge: true}",
+      );
+    }
 
     let finalData: DocumentData;
     if (options && existing) {
@@ -38,9 +83,10 @@ export class DocumentService {
         finalData = resolvedData;
       }
     } else {
-      finalData = resolvedData;
+      finalData = isMerge ? stripDeleteMarkers(resolvedData) : resolvedData;
     }
 
+    validateDocumentWrite(path, finalData);
     return this.repo.set({
       path,
       collectionPath,
@@ -54,6 +100,13 @@ export class DocumentService {
     const path = `${collectionPath}/${documentId}`;
     const resolvedData = this.resolveFieldValues(data, undefined);
 
+    if (containsDeleteMarker(resolvedData)) {
+      throw new DocumentValidationError(
+        "deleteField() can only be used with update() or set() with {merge: true}",
+      );
+    }
+
+    validateDocumentWrite(path, resolvedData);
     return this.repo.set({
       path,
       collectionPath,
@@ -72,11 +125,18 @@ export class DocumentService {
     const resolvedUpdates = this.resolveFieldValues(data, existing.data);
 
     for (const [key, value] of Object.entries(resolvedUpdates)) {
+      // deleteField はトップレベル（ドット記法パス含む）でのみ有効（本家と同じ制約）
+      if (!isDeleteMarker(value) && containsDeleteMarker(value)) {
+        throw new DocumentValidationError(
+          `deleteField() can only appear at the top level of update data (field: ${key})`,
+        );
+      }
       // ドット記法キーはリーフのみ更新する（本家 updateDoc と同じ挙動。
       // 親マップ全体を置換すると兄弟フィールドが消えてしまう）
       setFieldByPath(mergedData, key, value);
     }
 
+    validateDocumentWrite(path, mergedData);
     const { collectionPath, documentId } = parseDocumentPath(path);
     return this.repo.set({
       path,
@@ -124,7 +184,7 @@ export class DocumentService {
           };
         }
         case "deleteField":
-          return "$$__DELETE__$$";
+          return DELETE_MARKER;
         case "increment": {
           const current = typeof existingValue === "number" ? existingValue : 0;
           return current + (value.value as number);
@@ -143,6 +203,8 @@ export class DocumentService {
     }
 
     // 特殊型ラッパー（{__type: ...}）の内部には踏み込まない
+    // （deleteField マーカーと同じ形式の書き込みデータもここで素通しになるが、
+    // マーカーは resolveFieldValues の後段でのみ意味を持つため実害はない）
     if (isSpecialValueWrapper(value)) {
       return value;
     }
@@ -176,12 +238,12 @@ function isSpecialValueWrapper(value: unknown): boolean {
  * setDoc の merge オプション用の深いマージ
  *
  * ネストしたマップは再帰的にマージし、それ以外の値（配列・特殊型を含む）は上書きする。
- * deleteField センチネル（$$__DELETE__$$）はフィールドを削除する。
+ * deleteField マーカー（{__type: "delete"}）はフィールドを削除する。
  */
 function deepMerge(base: DocumentData, updates: DocumentData): Record<string, unknown> {
   const result: Record<string, unknown> = structuredClone(base);
   for (const [key, value] of Object.entries(updates)) {
-    if (value === "$$__DELETE__$$") {
+    if (isDeleteMarker(value)) {
       delete result[key];
     } else if (
       isPlainObject(value) &&
@@ -235,17 +297,31 @@ function setFieldByPath(data: DocumentData, path: string, value: unknown): void 
   for (let i = 0; i < segments.length - 1; i++) {
     const seg = segments[i];
     if (!isPlainObject(current[seg])) {
-      if (value === "$$__DELETE__$$") return; // 存在しないパスの削除は no-op
+      if (isDeleteMarker(value)) return; // 存在しないパスの削除は no-op
       current[seg] = {};
     }
     current = current[seg] as Record<string, unknown>;
   }
   const leaf = segments[segments.length - 1];
-  if (value === "$$__DELETE__$$") {
+  if (isDeleteMarker(value)) {
     delete current[leaf];
   } else {
     current[leaf] = value;
   }
+}
+
+/** merge set でドキュメントが存在しない場合に deleteField マーカーを取り除く */
+function stripDeleteMarkers(data: DocumentData): DocumentData {
+  const result: DocumentData = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (isDeleteMarker(value)) continue;
+    if (isPlainObject(value) && !isSpecialValueWrapper(value)) {
+      result[key] = stripDeleteMarkers(value as DocumentData);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 export class DocumentNotFoundError extends Error {

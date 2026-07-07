@@ -8,6 +8,7 @@ import type {
   SetDocumentRequest,
   UpdateDocumentRequest,
 } from "@local-firestore/shared";
+import { DocumentValidationError } from "@local-firestore/shared";
 import { Hono } from "hono";
 import type { DocumentService } from "../services/document.js";
 import { DocumentNotFoundError } from "../services/document.js";
@@ -50,13 +51,20 @@ export function createDocumentRoutes(
       );
     }
 
-    const meta = documentService.addDocument(body.collectionPath, body.data);
-    onDocumentChange?.(meta.path, undefined);
-    const response: AddDocumentResponse = {
-      path: meta.path,
-      documentId: meta.documentId,
-    };
-    return c.json(response, 201);
+    try {
+      const meta = documentService.addDocument(body.collectionPath, body.data);
+      onDocumentChange?.(meta.path, undefined);
+      const response: AddDocumentResponse = {
+        path: meta.path,
+        documentId: meta.documentId,
+      };
+      return c.json(response, 201);
+    } catch (e) {
+      if (e instanceof DocumentValidationError) {
+        return c.json<ErrorResponse>({ code: e.code, message: e.message }, 400);
+      }
+      throw e;
+    }
   });
 
   // PUT /docs/:path - ドキュメント作成/上書き（setDoc）
@@ -69,11 +77,18 @@ export function createDocumentRoutes(
       );
     }
 
-    const oldDoc = documentService.getDocument(path);
-    const body = await c.req.json<SetDocumentRequest>();
-    documentService.setDocument(path, body.data, body.options);
-    onDocumentChange?.(path, oldDoc);
-    return c.json({ success: true });
+    try {
+      const oldDoc = documentService.getDocument(path);
+      const body = await c.req.json<SetDocumentRequest>();
+      documentService.setDocument(path, body.data, body.options);
+      onDocumentChange?.(path, oldDoc);
+      return c.json({ success: true });
+    } catch (e) {
+      if (e instanceof DocumentValidationError) {
+        return c.json<ErrorResponse>({ code: e.code, message: e.message }, 400);
+      }
+      throw e;
+    }
   });
 
   // PATCH /docs/:path - ドキュメント更新（updateDoc）
@@ -95,6 +110,9 @@ export function createDocumentRoutes(
     } catch (e) {
       if (e instanceof DocumentNotFoundError) {
         return c.json<ErrorResponse>({ code: "not-found", message: e.message }, 404);
+      }
+      if (e instanceof DocumentValidationError) {
+        return c.json<ErrorResponse>({ code: e.code, message: e.message }, 400);
       }
       throw e;
     }

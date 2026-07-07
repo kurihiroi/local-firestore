@@ -5,6 +5,7 @@ import { getFirestore } from "./firestore.js";
 import { GeoPoint } from "./geo-point.js";
 import { doc } from "./references.js";
 import { deserializeData, serializeData, serializeValue } from "./serialization.js";
+import { FirestoreError } from "./transport.js";
 import { Timestamp } from "./types.js";
 import { VectorValue } from "./vector.js";
 
@@ -59,8 +60,46 @@ describe("serialization", () => {
       });
     });
 
-    it("undefined フィールドは除外される", () => {
-      expect(serializeData({ a: 1, b: undefined })).toEqual({ a: 1 });
+    it("undefined フィールドはデフォルトでエラーになる（本家同様）", () => {
+      expect(() => serializeData({ a: 1, b: undefined })).toThrow(FirestoreError);
+      try {
+        serializeData({ a: 1, nested: { b: undefined } });
+        expect.unreachable();
+      } catch (e) {
+        expect((e as FirestoreError).code).toBe("invalid-argument");
+        expect((e as FirestoreError).message).toContain("nested.b");
+      }
+    });
+
+    it("ignoreUndefinedProperties: true で undefined フィールドは除外される", () => {
+      expect(serializeData({ a: 1, b: undefined }, { ignoreUndefinedProperties: true })).toEqual({
+        a: 1,
+      });
+      expect(
+        serializeData({ nested: { a: 1, b: undefined } }, { ignoreUndefinedProperties: true }),
+      ).toEqual({ nested: { a: 1 } });
+    });
+
+    it("配列内の undefined は ignoreUndefinedProperties でもエラーになる", () => {
+      expect(() =>
+        serializeData({ list: [1, undefined] }, { ignoreUndefinedProperties: true }),
+      ).toThrow(FirestoreError);
+    });
+
+    it("配列内の FieldValue センチネルはエラーになる（本家同様）", () => {
+      expect(() => serializeData({ list: [serverTimestamp()] })).toThrow(FirestoreError);
+      try {
+        serializeData({ list: [serverTimestamp()] });
+        expect.unreachable();
+      } catch (e) {
+        expect((e as FirestoreError).code).toBe("invalid-argument");
+        expect((e as FirestoreError).message).toContain("serverTimestamp()");
+      }
+      // ネストした配列・arrayUnion の要素内も検査される
+      expect(() => serializeData({ nested: { list: [[serverTimestamp()]] } })).toThrow(
+        FirestoreError,
+      );
+      expect(() => serializeData({ tags: arrayUnion(serverTimestamp()) })).toThrow(FirestoreError);
     });
 
     it("FieldValue センチネルは維持しつつ内部の値を変換する", () => {

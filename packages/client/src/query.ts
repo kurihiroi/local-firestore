@@ -9,6 +9,7 @@ import type {
   VectorDistanceMeasure,
   WhereFilterOp,
 } from "@local-firestore/shared";
+import { validateQueryFilters } from "@local-firestore/shared";
 import { deserializeData, serializeValue } from "./serialization.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
@@ -76,7 +77,7 @@ function cursorConstraint(type: CursorConstraintType, values: unknown[]): QueryC
     };
   }
   return {
-    _serialized: { type, values: values.map(serializeValue) },
+    _serialized: { type, values: values.map((v) => serializeValue(v)) },
   };
 }
 
@@ -425,5 +426,11 @@ export function validateConstraints(constraints: SerializedQueryConstraint[]): v
       "invalid-argument",
       "limitToLast() queries require specifying at least one orderBy() clause",
     );
+  }
+
+  // 本家がエラーにするフィルタ組合せ・要素数制限（in/not-in/array-contains-any 等）
+  const filterError = validateQueryFilters(constraints);
+  if (filterError !== null) {
+    throw new FirestoreError("invalid-argument", filterError);
   }
 }
