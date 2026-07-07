@@ -706,4 +706,71 @@ describe("QueryService - Firestore互換セマンティクス", () => {
       ).toThrow(QueryValidationError);
     });
   });
+
+  describe("データ忠実度（Phase 3）", () => {
+    it("sum / avg は数値フィールドのみを集計する（文字列混在）", () => {
+      docService.setDocument("scores/a", { v: 10 });
+      docService.setDocument("scores/b", { v: 20 });
+      docService.setDocument("scores/c", { v: "not-a-number" });
+      docService.setDocument("scores/d", { v: true });
+      docService.setDocument("scores/e", { other: 1 }); // フィールド欠損
+
+      const result = queryService.executeAggregate("scores", [], {
+        total: { aggregateType: "sum", fieldPath: "v" },
+        average: { aggregateType: "avg", fieldPath: "v" },
+        count: { aggregateType: "count" },
+      });
+      expect(result.total).toBe(30);
+      // 平均の分母にも数値のみが入る（(10+20)/2 = 15。文字列を 0 扱いしない）
+      expect(result.average).toBe(15);
+      expect(result.count).toBe(5);
+    });
+
+    it("数値が1つもない場合 sum は 0、avg は null", () => {
+      docService.setDocument("scores/a", { v: "text" });
+      const result = queryService.executeAggregate("scores", [], {
+        total: { aggregateType: "sum", fieldPath: "v" },
+        average: { aggregateType: "avg", fieldPath: "v" },
+      });
+      expect(result.total).toBe(0);
+      expect(result.average).toBeNull();
+    });
+
+    it("NaN は数値の最小としてソートされる", () => {
+      docService.setDocument("nums/nan", { v: { __type: "double", value: "NaN" } });
+      docService.setDocument("nums/neginf", { v: { __type: "double", value: "-Infinity" } });
+      docService.setDocument("nums/zero", { v: 0 });
+      docService.setDocument("nums/one", { v: 1 });
+
+      const results = queryService.executeQuery("nums", [
+        { type: "orderBy", fieldPath: "v", direction: "asc" },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["nan", "neginf", "zero", "one"]);
+    });
+
+    it("== NaN フィルタがマッチする（本家仕様）", () => {
+      docService.setDocument("nums/nan", { v: { __type: "double", value: "NaN" } });
+      docService.setDocument("nums/one", { v: 1 });
+
+      const results = queryService.executeQuery("nums", [
+        { type: "where", fieldPath: "v", op: "==", value: { __type: "double", value: "NaN" } },
+      ]);
+      expect(results.map((r) => r.documentId)).toEqual(["nan"]);
+    });
+
+    it("Infinity の range フィルタと等値が機能する", () => {
+      docService.setDocument("nums/inf", { v: { __type: "double", value: "Infinity" } });
+      docService.setDocument("nums/big", { v: 1e308 });
+
+      const eq = queryService.executeQuery("nums", [
+        { type: "where", fieldPath: "v", op: "==", value: { __type: "double", value: "Infinity" } },
+      ]);
+      expect(eq.map((r) => r.documentId)).toEqual(["inf"]);
+
+      const gt = queryService.executeQuery("nums", [
+        { type: "where", fieldPath: "v", op: ">", value: 1e307 },
+      ]);
+      expect(gt.map((r) => r.documentId).sort()).toEqual(["big", "inf"]);
+    });
+  });
 });

@@ -181,4 +181,44 @@ describe("serialization", () => {
       expect(restored.plain).toEqual({ seconds: 1, nanoseconds: 2 });
     });
   });
+
+  describe("非有限数値（NaN / Infinity）のワイヤ表現", () => {
+    it("NaN / Infinity / -Infinity を double ラッパーに変換する", () => {
+      expect(serializeValue(Number.NaN)).toEqual({ __type: "double", value: "NaN" });
+      expect(serializeValue(Number.POSITIVE_INFINITY)).toEqual({
+        __type: "double",
+        value: "Infinity",
+      });
+      expect(serializeValue(Number.NEGATIVE_INFINITY)).toEqual({
+        __type: "double",
+        value: "-Infinity",
+      });
+    });
+
+    it("有限数値はそのまま", () => {
+      expect(serializeValue(1.5)).toBe(1.5);
+      expect(serializeValue(0)).toBe(0);
+    });
+
+    it("double ラッパーを数値に復元する（round-trip）", () => {
+      const data = deserializeData(
+        {
+          nan: { __type: "double", value: "NaN" },
+          inf: { __type: "double", value: "Infinity" },
+          ninf: { __type: "double", value: "-Infinity" },
+        },
+        firestore,
+      );
+      expect(Number.isNaN(data.nan as number)).toBe(true);
+      expect(data.inf).toBe(Number.POSITIVE_INFINITY);
+      expect(data.ninf).toBe(Number.NEGATIVE_INFINITY);
+    });
+
+    it("ネストしたマップ・配列内でも変換される", () => {
+      const serialized = serializeData({ nested: { values: [Number.NaN, 1] } });
+      expect(serialized).toEqual({
+        nested: { values: [{ __type: "double", value: "NaN" }, 1] },
+      });
+    });
+  });
 });

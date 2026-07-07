@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
 import type { LogLevel } from "./middleware/logger.js";
 import { JsonLogOutput, Logger } from "./middleware/logger.js";
+import { migrateDatabase } from "./migration/migrate.js";
 import type { AuthProvider } from "./security/auth-provider.js";
 import { LocalAuthProvider } from "./security/auth-provider.js";
 import type { SecurityRules } from "./security/rules-engine.js";
@@ -116,6 +117,29 @@ function startTtlService(
   return ttlService;
 }
 
+/**
+ * migrate サブコマンド: SQLite ファイル内の旧形式データを現行形式へ変換する。
+ *
+ * 使用方法: `local-firestore migrate [--dry-run]`（DB_PATH で対象ファイルを指定）
+ */
+function runMigrate(args: string[]): void {
+  const dbPath = process.env.DB_PATH || "local-firestore.db";
+  const dryRun = args.includes("--dry-run");
+
+  const db = createDatabase(dbPath);
+  const report = migrateDatabase(db, { dryRun });
+  db.close();
+
+  console.log(JSON.stringify({ dbPath, dryRun, ...report }, null, 2));
+  if (report.legacyDeleteMarkers.length > 0) {
+    console.error(
+      `WARNING: ${report.legacyDeleteMarkers.length} field(s) still contain the legacy ` +
+        'delete marker string "$$__DELETE__$$". These are reported only (not modified) — ' +
+        "review and fix them manually if they are sentinel residue.",
+    );
+  }
+}
+
 async function main() {
   const port = Number(process.env.PORT) || 8080;
   const dbPath = process.env.DB_PATH || "local-firestore.db";
@@ -189,4 +213,9 @@ async function main() {
   });
 }
 
-main();
+const subcommand = process.argv[2];
+if (subcommand === "migrate") {
+  runMigrate(process.argv.slice(3));
+} else {
+  main();
+}

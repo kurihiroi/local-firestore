@@ -4,6 +4,10 @@ export type { LogEntry, LogLevel, LogOutput } from "./middleware/logger.js";
 export { ConsoleLogOutput, JsonLogOutput, Logger, requestLogger } from "./middleware/logger.js";
 export type { ServerMetrics } from "./middleware/metrics.js";
 export { MetricsCollector, metricsMiddleware } from "./middleware/metrics.js";
+export type { MigrateOptions, MigrationReport } from "./migration/migrate.js";
+export { migrateDatabase } from "./migration/migrate.js";
+export type { NormalizeStats } from "./migration/normalize.js";
+export { normalizeLegacyDocumentData } from "./migration/normalize.js";
 export type {
   RegisterTriggerRequest,
   RegisterTriggerResponse,

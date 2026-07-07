@@ -50,8 +50,13 @@ function escapeString(s: string): string {
  *
  * IEEE754 double のビットパターンに対して、正数は符号ビットを立て、
  * 負数は全ビット反転することで、バイト列比較 = 数値比較になる。
+ * NaN は本家 Firestore と同様に数値の最小値（-Infinity より小さい）として扱う。
  */
 export function encodeNumber(n: number): string {
+  // NaN < -Infinity（-Infinity のエンコードは 000fff... なので全ゼロはそれより小さい）
+  if (Number.isNaN(n)) {
+    return "0".repeat(16);
+  }
   const buf = Buffer.alloc(8);
   // -0 と 0 は Firestore では等値
   buf.writeDoubleBE(n === 0 ? 0 : n, 0);
@@ -98,6 +103,10 @@ export function valueKey(value: unknown): string {
   }
   if (isSerializedWrapper(value)) {
     switch (value.__type) {
+      case "double": {
+        // NaN / Infinity / -Infinity のワイヤ表現（JSON では表現できないため）
+        return TYPE_TAG.number + encodeNumber(Number(value.value));
+      }
       case "timestamp": {
         const v = value.value as { seconds: number; nanoseconds: number };
         return (

@@ -231,4 +231,44 @@ describe("DocumentService", () => {
       );
     });
   });
+
+  describe("Timestamp のマイクロ秒切り捨て（C-2）", () => {
+    it("書き込み時にナノ秒がマイクロ秒精度に切り捨てられる", () => {
+      service.setDocument("events/e1", {
+        at: { __type: "timestamp", value: { seconds: 100, nanoseconds: 123_456_789 } },
+      });
+      expect(service.getDocument("events/e1")?.data.at).toEqual({
+        __type: "timestamp",
+        value: { seconds: 100, nanoseconds: 123_456_000 },
+      });
+    });
+
+    it("update / merge set でも切り捨てられる", () => {
+      service.setDocument("events/e1", { name: "x" });
+      service.updateDocument("events/e1", {
+        at: { __type: "timestamp", value: { seconds: 1, nanoseconds: 1999 } },
+      });
+      expect(service.getDocument("events/e1")?.data.at).toEqual({
+        __type: "timestamp",
+        value: { seconds: 1, nanoseconds: 1000 },
+      });
+
+      service.setDocument(
+        "events/e1",
+        { at2: { __type: "timestamp", value: { seconds: 2, nanoseconds: 999 } } },
+        { merge: true },
+      );
+      expect(service.getDocument("events/e1")?.data.at2).toEqual({
+        __type: "timestamp",
+        value: { seconds: 2, nanoseconds: 0 },
+      });
+    });
+
+    it("createTime / updateTime はマイクロ秒精度の ISO 文字列になる", () => {
+      const meta = service.setDocument("events/e1", { v: 1 });
+      // 小数部6桁（マイクロ秒）
+      expect(meta.createTime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/);
+      expect(meta.updateTime).toMatch(/\.\d{6}Z$/);
+    });
+  });
 });
