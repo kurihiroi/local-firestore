@@ -35,6 +35,32 @@ describe("firestore-key", () => {
     it("整数と同値の浮動小数点数は同じキーになる", () => {
       expect(encodeNumber(1)).toBe(encodeNumber(1.0));
     });
+
+    it("NaN は数値の最小として扱われる（本家仕様: NaN < -Infinity）", () => {
+      expect(encodeNumber(Number.NaN) < encodeNumber(Number.NEGATIVE_INFINITY)).toBe(true);
+      expect(encodeNumber(Number.NaN) < encodeNumber(-1e308)).toBe(true);
+      // NaN 同士は同じキー（== NaN フィルタが成立する）
+      expect(encodeNumber(Number.NaN)).toBe(encodeNumber(Number.NaN));
+    });
+  });
+
+  describe("valueKey - double ラッパー（NaN / Infinity）", () => {
+    it("double ラッパーは数値としてエンコードされる", () => {
+      expect(valueKey({ __type: "double", value: "Infinity" })).toBe(
+        valueKey(Number.POSITIVE_INFINITY),
+      );
+      expect(valueKey({ __type: "double", value: "-Infinity" })).toBe(
+        valueKey(Number.NEGATIVE_INFINITY),
+      );
+      expect(valueKey({ __type: "double", value: "NaN" })).toBe(valueKey(Number.NaN));
+    });
+
+    it("NaN ラッパーは全ての数値より小さく、null / boolean より大きい", () => {
+      const nanKey = valueKey({ __type: "double", value: "NaN" });
+      expect(nanKey > valueKey(true)).toBe(true);
+      expect(nanKey < valueKey(Number.NEGATIVE_INFINITY)).toBe(true);
+      expect(nanKey < valueKey(0)).toBe(true);
+    });
   });
 
   describe("valueKey - 型順序", () => {

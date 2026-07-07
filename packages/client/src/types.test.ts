@@ -51,6 +51,36 @@ describe("Timestamp", () => {
     const ts = new Timestamp(100, 500);
     expect(ts.toString()).toBe("Timestamp(seconds=100, nanoseconds=500)");
   });
+
+  describe("fromISO", () => {
+    it("ミリ秒精度の ISO 文字列をパースできる", () => {
+      const ts = Timestamp.fromISO("2025-01-15T10:30:00.123Z");
+      expect(ts.seconds).toBe(Math.floor(new Date("2025-01-15T10:30:00Z").getTime() / 1000));
+      expect(ts.nanoseconds).toBe(123_000_000);
+    });
+
+    it("マイクロ秒精度（小数6桁）を丸めずにパースする", () => {
+      const ts = Timestamp.fromISO("2025-01-15T10:30:00.123456Z");
+      expect(ts.nanoseconds).toBe(123_456_000);
+    });
+
+    it("ナノ秒精度（小数9桁）もパースできる", () => {
+      const ts = Timestamp.fromISO("2025-01-15T10:30:00.123456789Z");
+      expect(ts.nanoseconds).toBe(123_456_789);
+    });
+
+    it("小数部なしの ISO 文字列をパースできる", () => {
+      const ts = Timestamp.fromISO("2025-01-15T10:30:00Z");
+      expect(ts.nanoseconds).toBe(0);
+      expect(ts.seconds).toBe(Math.floor(new Date("2025-01-15T10:30:00Z").getTime() / 1000));
+    });
+
+    it("タイムゾーンオフセット付きの ISO 文字列をパースできる", () => {
+      const ts = Timestamp.fromISO("2025-01-15T19:30:00.000001+09:00");
+      expect(ts.seconds).toBe(Math.floor(new Date("2025-01-15T10:30:00Z").getTime() / 1000));
+      expect(ts.nanoseconds).toBe(1000);
+    });
+  });
 });
 
 describe("FieldPath", () => {

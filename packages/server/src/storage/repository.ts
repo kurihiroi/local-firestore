@@ -1,5 +1,6 @@
 import type { DocumentData, DocumentMetadata } from "@local-firestore/shared";
 import type Database from "better-sqlite3";
+import { nowIsoMicros } from "../utils/time.js";
 
 export class DocumentRepository {
   private stmts: {
@@ -42,7 +43,8 @@ export class DocumentRepository {
     documentId: string;
     data: DocumentData;
   }): DocumentMetadata {
-    const now = new Date().toISOString();
+    // 本家仕様に合わせて createTime / updateTime はマイクロ秒精度で生成する
+    const now = nowIsoMicros();
     const dataJson = JSON.stringify(meta.data);
 
     const existing = this.get(meta.path);

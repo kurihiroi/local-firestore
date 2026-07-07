@@ -211,16 +211,16 @@ export class QueryService {
           if (!field.fieldPath) {
             throw new Error("sum requires a fieldPath");
           }
-          const fieldExpr = `json_extract(data, '$.${escapePath(field.fieldPath)}')`;
-          selectParts.push(`COALESCE(SUM(${fieldExpr}), 0) AS "${alias}"`);
+          // 本家の sum() は数値フィールドのみを集計する（文字列等は無視）
+          selectParts.push(`COALESCE(SUM(${numericFieldExpr(field.fieldPath)}), 0) AS "${alias}"`);
           break;
         }
         case "avg": {
           if (!field.fieldPath) {
             throw new Error("avg requires a fieldPath");
           }
-          const fieldExpr = `json_extract(data, '$.${escapePath(field.fieldPath)}')`;
-          selectParts.push(`AVG(${fieldExpr}) AS "${alias}"`);
+          // 本家の avg() は数値フィールドのみを集計する（分母にも数値のみが入る）
+          selectParts.push(`AVG(${numericFieldExpr(field.fieldPath)}) AS "${alias}"`);
           break;
         }
         default: {
@@ -249,6 +249,15 @@ function fieldJsonExpr(fieldPath: string): string {
 /** フィールド値の Firestore 順序キーを計算する式 */
 function fieldKeyExpr(fieldPath: string): string {
   return `firestore_key(${fieldJsonExpr(fieldPath)})`;
+}
+
+/**
+ * 数値フィールドのみを取り出す式（sum / avg 用）。
+ * 数値以外の型（文字列・boolean・null・マップ等）は NULL になり集計から除外される。
+ */
+function numericFieldExpr(fieldPath: string): string {
+  const path = escapePath(fieldPath);
+  return `(CASE WHEN json_type(data, '$.${path}') IN ('integer', 'real') THEN json_extract(data, '$.${path}') END)`;
 }
 
 /**

@@ -2,6 +2,7 @@ import type {
   DocumentData,
   FieldValueSentinel,
   SerializedBytes,
+  SerializedDouble,
   SerializedGeoPoint,
   SerializedReference,
   SerializedTimestamp,
@@ -25,7 +26,7 @@ import { VectorValue } from "./vector.js";
  */
 
 interface SerializedWrapper {
-  __type: "timestamp" | "geopoint" | "bytes" | "reference" | "vector";
+  __type: "timestamp" | "geopoint" | "bytes" | "reference" | "vector" | "double";
 }
 
 function isSerializedWrapper(value: unknown): value is SerializedWrapper & Record<string, unknown> {
@@ -68,6 +69,15 @@ function serializeValueInternal(
   insideArray: boolean,
 ): unknown {
   if (value === null || value === undefined) return value;
+
+  // NaN / Infinity は JSON で表現できないためラッパーで運ぶ（本家は値として保存可能）
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    const serialized: SerializedDouble = {
+      __type: "double",
+      value: Number.isNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity",
+    };
+    return serialized;
+  }
 
   if (value instanceof Timestamp) {
     const serialized: SerializedTimestamp = {
@@ -171,6 +181,8 @@ export function deserializeValue(value: unknown, firestore: Firestore): unknown 
         return doc(firestore, (value as unknown as SerializedReference).value);
       case "vector":
         return VectorValue.fromSerialized(value as unknown as SerializedVectorValue);
+      case "double":
+        return Number((value as unknown as SerializedDouble).value);
     }
   }
   if (Array.isArray(value)) {

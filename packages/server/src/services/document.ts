@@ -9,6 +9,7 @@ import {
   isFieldValueSentinel,
   validateDocumentWrite,
 } from "@local-firestore/shared";
+import { truncateTimestampsToMicros } from "../migration/normalize.js";
 import type { DocumentRepository } from "../storage/repository.js";
 import { generateDocumentId } from "../utils/id.js";
 import { parseDocumentPath } from "../utils/path.js";
@@ -86,6 +87,9 @@ export class DocumentService {
       finalData = isMerge ? stripDeleteMarkers(resolvedData) : resolvedData;
     }
 
+    // 本家仕様: Timestamp はマイクロ秒精度に切り捨てて保存する
+    finalData = truncateTimestampsToMicros(finalData);
+
     validateDocumentWrite(path, finalData);
     return this.repo.set({
       path,
@@ -98,7 +102,7 @@ export class DocumentService {
   addDocument(collectionPath: string, data: DocumentData): DocumentMetadata {
     const documentId = generateDocumentId();
     const path = `${collectionPath}/${documentId}`;
-    const resolvedData = this.resolveFieldValues(data, undefined);
+    const resolvedData = truncateTimestampsToMicros(this.resolveFieldValues(data, undefined));
 
     if (containsDeleteMarker(resolvedData)) {
       throw new DocumentValidationError(
@@ -136,13 +140,14 @@ export class DocumentService {
       setFieldByPath(mergedData, key, value);
     }
 
-    validateDocumentWrite(path, mergedData);
+    const truncatedData = truncateTimestampsToMicros(mergedData);
+    validateDocumentWrite(path, truncatedData);
     const { collectionPath, documentId } = parseDocumentPath(path);
     return this.repo.set({
       path,
       collectionPath,
       documentId,
-      data: mergedData,
+      data: truncatedData,
     });
   }
 

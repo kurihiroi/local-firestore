@@ -72,6 +72,7 @@ export type {
   SerializedBytes,
   SerializedCompositeFilterConstraint,
   SerializedCursorConstraint,
+  SerializedDouble,
   SerializedFindNearestConstraint,
   SerializedGeoPoint,
   SerializedLimitConstraint,

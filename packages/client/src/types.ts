@@ -137,9 +137,25 @@ export class Timestamp {
     return new Timestamp(Math.floor(milliseconds / 1000), (milliseconds % 1000) * 1_000_000);
   }
 
-  /** @internal ISO文字列からTimestampを生成 */
+  /**
+   * @internal ISO文字列からTimestampを生成
+   *
+   * ミリ秒を超える小数秒（マイクロ秒 / ナノ秒精度）も丸めずにパースする。
+   * サーバーの createTime / updateTime はマイクロ秒精度で生成されるため、
+   * `new Date(iso)`（ミリ秒精度に丸められる）では精度が落ちる。
+   */
   static fromISO(iso: string): Timestamp {
-    return Timestamp.fromDate(new Date(iso));
+    const match = /^(.+T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:?\d{2})$/.exec(iso);
+    if (!match) {
+      return Timestamp.fromDate(new Date(iso));
+    }
+    const [, base, fraction, offset] = match;
+    const epochMs = new Date(`${base}${offset}`).getTime();
+    if (Number.isNaN(epochMs)) {
+      return Timestamp.fromDate(new Date(iso));
+    }
+    const nanoseconds = fraction ? Number(fraction.padEnd(9, "0")) : 0;
+    return new Timestamp(epochMs / 1000, nanoseconds);
   }
 
   /** @internal シリアライズされた形式から復元 */

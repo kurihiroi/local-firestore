@@ -81,6 +81,17 @@ export interface SerializedVectorValue {
   values: number[];
 }
 
+/**
+ * シリアライズされた非有限数値（NaN / Infinity / -Infinity）
+ *
+ * JSON では NaN / Infinity を表現できない（null になってしまう）ため、
+ * 特殊型ラッパーとしてワイヤ上を運ぶ。有限数値は素の JSON number のまま。
+ */
+export interface SerializedDouble {
+  __type: "double";
+  value: "NaN" | "Infinity" | "-Infinity";
+}
+
 /** FieldValueセンチネルの種別 */
 export type FieldValueType =
   | "serverTimestamp"

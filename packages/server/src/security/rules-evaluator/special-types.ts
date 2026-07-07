@@ -59,6 +59,13 @@ function convertSpecialValue(obj: Record<string, unknown>): RulesValue | null {
   if (typeof type !== "string") return null;
 
   switch (type) {
+    case "double": {
+      // 非有限数値（NaN / Infinity / -Infinity）のワイヤ表現
+      if (typeof obj.value === "string") {
+        return mkFloat(Number(obj.value));
+      }
+      return null;
+    }
     case "timestamp": {
       const value = obj.value as { seconds?: unknown; nanoseconds?: unknown } | undefined;
       if (value && typeof value.seconds === "number" && typeof value.nanoseconds === "number") {

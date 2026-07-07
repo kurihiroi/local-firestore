@@ -5,6 +5,7 @@ import type {
   ImportResponse,
 } from "@local-firestore/shared";
 import { Hono } from "hono";
+import { normalizeLegacyDocumentData } from "../migration/normalize.js";
 import type { DocumentRepository } from "../storage/repository.js";
 import { parseDocumentPath } from "../utils/path.js";
 
@@ -41,11 +42,14 @@ export function createDataRoutes(repo: DocumentRepository): Hono {
     let imported = 0;
     for (const doc of body.documents) {
       const { collectionPath, documentId } = parseDocumentPath(doc.path);
+      // 旧形式データ（素の {seconds, nanoseconds} マップ・ナノ秒精度 Timestamp）を
+      // 現行形式へ変換する（migrate CLI と同じ正規化。export → import での移行経路）
+      const { data } = normalizeLegacyDocumentData(doc.data);
       repo.set({
         path: doc.path,
         collectionPath,
         documentId,
-        data: doc.data,
+        data,
       });
       imported++;
     }

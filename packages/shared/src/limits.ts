@@ -99,6 +99,7 @@ export function calculateValueSize(value: unknown): number {
   if (isSpecialValueWrapper(value)) {
     switch (value.__type) {
       case "timestamp":
+      case "double":
         return 8;
       case "geopoint":
         return 16;
