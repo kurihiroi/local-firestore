@@ -1,6 +1,6 @@
 import type { VectorDistanceMeasure } from "@local-firestore/shared";
+import { arrayContainsKey, computeFirestoreKey } from "@local-firestore/shared";
 import Database from "better-sqlite3";
-import { arrayContainsKey, computeFirestoreKey } from "./firestore-key.js";
 import { initSchema } from "./schema.js";
 
 export function createDatabase(path: string = ":memory:"): Database.Database {

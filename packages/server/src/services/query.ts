@@ -10,9 +10,14 @@ import type {
   SerializedQueryConstraint,
   SerializedWhereConstraint,
 } from "@local-firestore/shared";
-import { validateQueryFilters } from "@local-firestore/shared";
+import {
+  nextTypeTag,
+  TYPE_TAG,
+  validateQueryFilters,
+  valueKey,
+  valueTypeTag,
+} from "@local-firestore/shared";
 import type Database from "better-sqlite3";
-import { nextTypeTag, TYPE_TAG, valueKey, valueTypeTag } from "../storage/firestore-key.js";
 
 /** クエリ制約が本家 Firestore で不正となるケースのエラー */
 export class QueryValidationError extends Error {

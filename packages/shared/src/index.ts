@@ -1,4 +1,13 @@
 export {
+  arrayContainsKey,
+  computeFirestoreKey,
+  encodeNumber,
+  nextTypeTag,
+  TYPE_TAG,
+  valueKey,
+  valueTypeTag,
+} from "./firestore-key.js";
+export {
   calculateDocumentNameSize,
   calculateDocumentSize,
   calculateValueSize,
@@ -48,6 +57,12 @@ export type {
   UpdateDocumentRequest,
 } from "./protocol.js";
 export { isFieldValueSentinel } from "./protocol.js";
+export type { MatchableDocument } from "./query-matcher.js";
+export {
+  applyQueryConstraints,
+  matchesCollection,
+  matchesQueryFilters,
+} from "./query-matcher.js";
 export {
   MAX_DISJUNCTION_VALUES,
   MAX_NOT_IN_VALUES,

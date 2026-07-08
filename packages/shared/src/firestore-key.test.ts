@@ -174,4 +174,34 @@ describe("firestore-key", () => {
       expect(arrayContainsKey(null, valueKey(1))).toBe(false);
     });
   });
+
+  describe("エンコード互換性（Buffer 実装からの移行）", () => {
+    // packages/server/src/storage/firestore-key.ts（Buffer ベースの旧実装）の
+    // 出力を固定値として採取したもの。shared への移動（DataView / atob 化）で
+    // キーが変わるとインデックス済みデータとの比較が壊れるため固定する。
+    it("encodeNumber の出力が旧実装と一致する", () => {
+      expect(encodeNumber(0)).toBe("8000000000000000");
+      expect(encodeNumber(1)).toBe("bff0000000000000");
+      expect(encodeNumber(-1)).toBe("400fffffffffffff");
+      expect(encodeNumber(1.5)).toBe("bff8000000000000");
+      expect(encodeNumber(-1e100)).toBe("2b4db652da6b3c82");
+      expect(encodeNumber(Number.POSITIVE_INFINITY)).toBe("fff0000000000000");
+      expect(encodeNumber(Number.NEGATIVE_INFINITY)).toBe("000fffffffffffff");
+      expect(encodeNumber(Number.NaN)).toBe("0000000000000000");
+    });
+
+    it("bytes キー（base64 → latin1）の出力が旧実装と一致する", () => {
+      // バイト列 [0x68, 0xc3, 0xa9, 0x00, 0x01, 0xff]（マルチバイト・制御文字含む）
+      const b64 = Buffer.from([0x68, 0xc3, 0xa9, 0x00, 0x01, 0xff]).toString("base64");
+      expect(valueKey({ __type: "bytes", value: b64 })).toBe(
+        "6h\u00c3\u00a9\u0002\u0001\u0002\u0002\u00ff\u0001",
+      );
+    });
+
+    it("timestamp キーの出力が旧実装と一致する", () => {
+      expect(
+        valueKey({ __type: "timestamp", value: { seconds: 1700000000, nanoseconds: 123456000 } }),
+      ).toBe("4c1d954fc40000000123456000");
+    });
+  });
 });
