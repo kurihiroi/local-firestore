@@ -1,4 +1,9 @@
-import type { BatchOperation, DocumentMetadata, FirestoreErrorCode } from "@local-firestore/shared";
+import type {
+  BatchOperation,
+  DocumentMetadata,
+  FirestoreErrorCode,
+  WriteResult,
+} from "@local-firestore/shared";
 import type Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import { DocumentRepository } from "../storage/repository.js";
@@ -42,7 +47,7 @@ export class TransactionService {
     return doc;
   }
 
-  commit(transactionId: string, operations: BatchOperation[]): void {
+  commit(transactionId: string, operations: BatchOperation[]): WriteResult[] {
     const txn = this.getActiveTxn(transactionId);
 
     const run = this.db.transaction(() => {
@@ -55,11 +60,11 @@ export class TransactionService {
         }
       }
 
-      this.applyOperations(operations);
+      return this.applyOperations(operations);
     });
 
     try {
-      run();
+      return run();
     } finally {
       this.activeTxns.delete(transactionId);
     }
@@ -69,24 +74,31 @@ export class TransactionService {
     this.activeTxns.delete(transactionId);
   }
 
-  executeBatch(operations: BatchOperation[]): void {
+  executeBatch(operations: BatchOperation[]): WriteResult[] {
     const run = this.db.transaction(() => {
-      this.applyOperations(operations);
+      return this.applyOperations(operations);
     });
-    run();
+    return run();
   }
 
-  private applyOperations(operations: BatchOperation[]): void {
+  /** 各オペレーションを適用し、書き込み結果（確定した create/updateTime）を返す */
+  private applyOperations(operations: BatchOperation[]): WriteResult[] {
+    const results: WriteResult[] = [];
     for (const op of operations) {
       switch (op.type) {
-        case "set":
-          this.docService.setDocument(op.path, op.data ?? {});
+        case "set": {
+          const meta = this.docService.setDocument(op.path, op.data ?? {});
+          results.push({ path: op.path, createTime: meta.createTime, updateTime: meta.updateTime });
           break;
-        case "update":
-          this.docService.updateDocument(op.path, op.data ?? {});
+        }
+        case "update": {
+          const meta = this.docService.updateDocument(op.path, op.data ?? {});
+          results.push({ path: op.path, createTime: meta.createTime, updateTime: meta.updateTime });
           break;
+        }
         case "delete":
           this.docService.deleteDocument(op.path);
+          results.push({ path: op.path });
           break;
         default: {
           const _exhaustive: never = op.type;
@@ -94,6 +106,7 @@ export class TransactionService {
         }
       }
     }
+    return results;
   }
 
   private getActiveTxn(transactionId: string) {

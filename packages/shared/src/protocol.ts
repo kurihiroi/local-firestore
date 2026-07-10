@@ -26,10 +26,26 @@ export interface AddDocumentRequest {
   data: DocumentData;
 }
 
+/**
+ * 単一書き込みの結果（サーバーが確定した時刻）
+ *
+ * クライアントのレイテンシ補償が pending mutation の overlay 除去判定
+ * （サーバースナップショットの updateTime との比較）に使用する。
+ */
+export interface WriteResult {
+  path: string;
+  /** delete オペレーションでは undefined */
+  createTime?: string;
+  /** delete オペレーションでは undefined */
+  updateTime?: string;
+}
+
 /** POST /docs レスポンス */
 export interface AddDocumentResponse {
   path: string;
   documentId: string;
+  createTime: string;
+  updateTime: string;
 }
 
 /** PUT /docs/:path リクエスト（setDoc） */
@@ -38,14 +54,31 @@ export interface SetDocumentRequest {
   options?: SetOptions;
 }
 
+/** PUT /docs/:path レスポンス */
+export interface SetDocumentResponse {
+  success: boolean;
+  path: string;
+  createTime: string;
+  updateTime: string;
+}
+
 /** PATCH /docs/:path リクエスト（updateDoc） */
 export interface UpdateDocumentRequest {
   data: DocumentData;
 }
 
+/** PATCH /docs/:path レスポンス */
+export interface UpdateDocumentResponse {
+  success: boolean;
+  path: string;
+  createTime: string;
+  updateTime: string;
+}
+
 /** DELETE /docs/:path レスポンス */
 export interface DeleteDocumentResponse {
   success: boolean;
+  path?: string;
 }
 
 /** POST /query リクエスト */
@@ -110,6 +143,8 @@ export interface BatchRequest {
 /** POST /batch レスポンス */
 export interface BatchResponse {
   success: boolean;
+  /** 各オペレーションの書き込み結果（リクエストと同順） */
+  writeResults: WriteResult[];
 }
 
 // ============================================================
@@ -136,6 +171,8 @@ export interface TransactionCommitRequest {
 /** POST /transaction/commit レスポンス */
 export interface TransactionCommitResponse {
   success: boolean;
+  /** 各オペレーションの書き込み結果（リクエストと同順） */
+  writeResults: WriteResult[];
 }
 
 /** POST /transaction/rollback リクエスト */

@@ -30,13 +30,13 @@ export function createBatchRoutes(
     const body = await c.req.json<BatchRequest>();
     try {
       validateWriteOperationCount(body.operations.length);
-      transactionService.executeBatch(body.operations);
+      const writeResults = transactionService.executeBatch(body.operations);
       if (onDocumentChange) {
         for (const op of body.operations) {
           onDocumentChange(op.path);
         }
       }
-      return c.json<BatchResponse>({ success: true });
+      return c.json<BatchResponse>({ success: true, writeResults });
     } catch (e) {
       return handleError(c, e);
     }
@@ -71,13 +71,13 @@ export function createBatchRoutes(
     const body = await c.req.json<TransactionCommitRequest>();
     try {
       validateWriteOperationCount(body.operations.length);
-      transactionService.commit(body.transactionId, body.operations);
+      const writeResults = transactionService.commit(body.transactionId, body.operations);
       if (onDocumentChange) {
         for (const op of body.operations) {
           onDocumentChange(op.path);
         }
       }
-      return c.json<TransactionCommitResponse>({ success: true });
+      return c.json<TransactionCommitResponse>({ success: true, writeResults });
     } catch (e) {
       return handleError(c, e);
     }
