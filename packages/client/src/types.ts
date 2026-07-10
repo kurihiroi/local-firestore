@@ -78,15 +78,18 @@ const DEFAULT_METADATA = new SnapshotMetadata(false, false);
 
 /** ドキュメントスナップショット */
 export class DocumentSnapshot<T = DocumentData> {
+  /** スナップショットのメタデータ */
+  readonly metadata: SnapshotMetadata;
+
   constructor(
     readonly ref: DocumentReference<T>,
     private readonly _data: T | null,
     private readonly _createTime: string | null,
     private readonly _updateTime: string | null,
-  ) {}
-
-  /** スナップショットのメタデータ */
-  readonly metadata: SnapshotMetadata = DEFAULT_METADATA;
+    metadata?: SnapshotMetadata,
+  ) {
+    this.metadata = metadata ?? DEFAULT_METADATA;
+  }
 
   get id(): string {
     return this.ref.id;

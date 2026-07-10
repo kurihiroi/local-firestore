@@ -170,20 +170,21 @@ describe("setDoc()", () => {
 });
 
 describe("addDoc()", () => {
-  it("transportのpostを呼び出しDocumentReferenceを返す", async () => {
+  it("クライアント生成 ID で set として書き込み DocumentReference を返す", async () => {
     const transport = createMockTransport();
-    transport.post.mockResolvedValue({ documentId: "auto-id-123", path: "users/auto-id-123" });
+    transport.put.mockResolvedValue({ success: true });
     const firestore = createMockFirestore(transport);
     const collRef = createMockCollRef(firestore, "users");
 
     const result = await addDoc(collRef, { name: "Bob" });
 
-    expect(transport.post).toHaveBeenCalledWith("/docs", {
-      collectionPath: "users",
-      data: { name: "Bob" },
-    });
+    // 本家同様、ID はクライアント側で生成して PUT（set）で書き込む
     expect(result.type).toBe("document");
-    expect(result.id).toBe("auto-id-123");
+    expect(result.id).toHaveLength(20);
+    expect(transport.put).toHaveBeenCalledWith(`/docs/users/${result.id}`, {
+      data: { name: "Bob" },
+      options: undefined,
+    });
   });
 });
 

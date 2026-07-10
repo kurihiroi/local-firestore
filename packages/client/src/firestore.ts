@@ -1,6 +1,7 @@
 import { getConnectionManager, hasConnectionManager } from "./connection.js";
+import { getLocalStore } from "./local-store.js";
 import { logDebug } from "./logger.js";
-import { getWriteQueue, setNetworkEnabled } from "./network-state.js";
+import { setNetworkEnabled } from "./network-state.js";
 import type { AuthTokenProvider } from "./transport.js";
 import { FirestoreError, HttpTransport } from "./transport.js";
 import type { Firestore } from "./types.js";
@@ -263,8 +264,9 @@ export function terminate(firestore: Firestore): Promise<void> {
 /**
  * ネットワーク接続を無効化する
  *
- * 無効化中の書き込みは WriteQueue にエンキューされ、
- * `enableNetwork()` 呼び出し時にまとめてサーバーへ送信される。
+ * 無効化中の書き込みはローカルストアの MutationQueue に保持され、ローカルビュー
+ * （リスナー・キャッシュ読み取り）へは即時反映される。`enableNetwork()` 呼び出し時に
+ * まとめてサーバーへ送信される。
  */
 export function disableNetwork(firestore: Firestore): Promise<void> {
   setNetworkEnabled(firestore, false);
@@ -279,12 +281,15 @@ export async function enableNetwork(firestore: Firestore): Promise<void> {
   setNetworkEnabled(firestore, true);
   const manager = getConnectionManager(firestore);
   manager.connect();
-  const queue = getWriteQueue(firestore);
-  logDebug(`Network enabled, flushing ${queue.size} queued write(s)`);
-  await queue.flush();
+  const store = getLocalStore(firestore);
+  logDebug(`Network enabled, flushing ${store.pendingMutationCount} queued write(s)`);
+  await store.flush();
 }
 
-/** 保留中の書き込みがすべてサーバーに送信されるまで待機する */
+/**
+ * 保留中の書き込みがすべてサーバーで確定（ack または reject）されるまで待機する。
+ * 呼び出し時点でキューにある書き込みのみを待つ（本家と同じセマンティクス）。
+ */
 export function waitForPendingWrites(firestore: Firestore): Promise<void> {
-  return getWriteQueue(firestore).waitForDrain();
+  return getLocalStore(firestore).waitForPendingWrites();
 }
