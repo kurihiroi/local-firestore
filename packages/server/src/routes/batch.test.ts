@@ -26,6 +26,24 @@ describe("Batch & Transaction Routes", () => {
       expect(aliceBody.data!.name).toBe("Alice");
     });
 
+    it("バッチレスポンスに各オペレーションの writeResults が含まれる", async () => {
+      await request(app, "PUT", "/docs/users/todelete", { data: { v: 1 } });
+      const res = await request(app, "POST", "/batch", {
+        operations: [
+          { type: "set", path: "users/wr1", data: { v: 1 } },
+          { type: "delete", path: "users/todelete" },
+        ],
+      });
+      const body = await jsonBody<{
+        success: boolean;
+        writeResults: Array<{ path: string; updateTime?: string }>;
+      }>(res);
+      expect(body.writeResults).toHaveLength(2);
+      expect(body.writeResults[0].path).toBe("users/wr1");
+      expect(body.writeResults[0].updateTime).toMatch(/\.\d{6}Z$/);
+      expect(body.writeResults[1]).toEqual({ path: "users/todelete" });
+    });
+
     it("500 オペレーション超のバッチは invalid-argument で拒否される", async () => {
       const operations = Array.from({ length: 501 }, (_, i) => ({
         type: "set",

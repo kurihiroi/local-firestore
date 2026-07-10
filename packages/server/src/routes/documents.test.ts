@@ -26,7 +26,7 @@ describe("Document Routes", () => {
         data: { name: "Alice", age: 30 },
       });
       expect(res.status).toBe(200);
-      expect(await jsonBody(res)).toEqual({ success: true });
+      expect(await jsonBody(res)).toMatchObject({ success: true, path: "users/alice" });
     });
 
     it("不正なパスで400を返す", async () => {
@@ -186,6 +186,44 @@ describe("Document Routes", () => {
       const body = await jsonBody(getRes);
       expect(body.exists).toBe(true);
       expect(body.data).toEqual({ title: "Hello World" });
+    });
+  });
+
+  describe("書き込みレスポンスの WriteResult（4c）", () => {
+    const MICRO_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+    it("PUT /docs は path / createTime / updateTime を返す", async () => {
+      const res = await request(app, "PUT", "/docs/users/w1", { data: { v: 1 } });
+      const body = await jsonBody<{
+        success: boolean;
+        path: string;
+        createTime: string;
+        updateTime: string;
+      }>(res);
+      expect(body.success).toBe(true);
+      expect(body.path).toBe("users/w1");
+      expect(body.createTime).toMatch(MICRO_ISO);
+      expect(body.updateTime).toMatch(MICRO_ISO);
+    });
+
+    it("PATCH /docs は更新後の updateTime を返す", async () => {
+      const createRes = await request(app, "PUT", "/docs/users/w2", { data: { v: 1 } });
+      const created = await jsonBody<{ updateTime: string }>(createRes);
+
+      const res = await request(app, "PATCH", "/docs/users/w2", { data: { v: 2 } });
+      const body = await jsonBody<{ path: string; updateTime: string }>(res);
+      expect(body.path).toBe("users/w2");
+      expect(body.updateTime >= created.updateTime).toBe(true);
+    });
+
+    it("POST /docs（addDoc）は createTime / updateTime を返す", async () => {
+      const res = await request(app, "POST", "/docs", {
+        collectionPath: "users",
+        data: { v: 1 },
+      });
+      const body = await jsonBody<{ createTime: string; updateTime: string }>(res);
+      expect(body.createTime).toMatch(MICRO_ISO);
+      expect(body.updateTime).toBe(body.createTime);
     });
   });
 });

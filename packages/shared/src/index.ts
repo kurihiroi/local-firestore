@@ -18,6 +18,13 @@ export {
   validateDocumentWrite,
   validateWriteOperationCount,
 } from "./limits.js";
+export type { MutationContext } from "./mutation-applier.js";
+export {
+  applySetMutation,
+  applyUpdateMutation,
+  createServerMutationContext,
+  isDeleteMarker,
+} from "./mutation-applier.js";
 export type {
   AddDocumentRequest,
   AddDocumentResponse,
@@ -45,6 +52,7 @@ export type {
   QuerySnapshotMessage,
   ServerMessage,
   SetDocumentRequest,
+  SetDocumentResponse,
   SnapshotErrorMessage,
   SubscribeDocMessage,
   SubscribeQueryMessage,
@@ -55,6 +63,8 @@ export type {
   TransactionRollbackRequest,
   UnsubscribeMessage,
   UpdateDocumentRequest,
+  UpdateDocumentResponse,
+  WriteResult,
 } from "./protocol.js";
 export { isFieldValueSentinel } from "./protocol.js";
 export type { MatchableDocument } from "./query-matcher.js";

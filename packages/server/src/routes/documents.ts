@@ -6,7 +6,9 @@ import type {
   ErrorResponse,
   GetDocumentResponse,
   SetDocumentRequest,
+  SetDocumentResponse,
   UpdateDocumentRequest,
+  UpdateDocumentResponse,
 } from "@local-firestore/shared";
 import { DocumentValidationError } from "@local-firestore/shared";
 import { Hono } from "hono";
@@ -57,6 +59,8 @@ export function createDocumentRoutes(
       const response: AddDocumentResponse = {
         path: meta.path,
         documentId: meta.documentId,
+        createTime: meta.createTime,
+        updateTime: meta.updateTime,
       };
       return c.json(response, 201);
     } catch (e) {
@@ -80,9 +84,15 @@ export function createDocumentRoutes(
     try {
       const oldDoc = documentService.getDocument(path);
       const body = await c.req.json<SetDocumentRequest>();
-      documentService.setDocument(path, body.data, body.options);
+      const meta = documentService.setDocument(path, body.data, body.options);
       onDocumentChange?.(path, oldDoc);
-      return c.json({ success: true });
+      const response: SetDocumentResponse = {
+        success: true,
+        path,
+        createTime: meta.createTime,
+        updateTime: meta.updateTime,
+      };
+      return c.json(response);
     } catch (e) {
       if (e instanceof DocumentValidationError) {
         return c.json<ErrorResponse>({ code: e.code, message: e.message }, 400);
@@ -104,9 +114,15 @@ export function createDocumentRoutes(
     try {
       const oldDoc = documentService.getDocument(path);
       const body = await c.req.json<UpdateDocumentRequest>();
-      documentService.updateDocument(path, body.data);
+      const meta = documentService.updateDocument(path, body.data);
       onDocumentChange?.(path, oldDoc);
-      return c.json({ success: true });
+      const response: UpdateDocumentResponse = {
+        success: true,
+        path,
+        createTime: meta.createTime,
+        updateTime: meta.updateTime,
+      };
+      return c.json(response);
     } catch (e) {
       if (e instanceof DocumentNotFoundError) {
         return c.json<ErrorResponse>({ code: "not-found", message: e.message }, 404);
@@ -131,7 +147,7 @@ export function createDocumentRoutes(
     const oldDoc = documentService.getDocument(path);
     documentService.deleteDocument(path);
     onDocumentChange?.(path, oldDoc);
-    const response: DeleteDocumentResponse = { success: true };
+    const response: DeleteDocumentResponse = { success: true, path };
     return c.json(response);
   });
 
