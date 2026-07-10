@@ -2,7 +2,8 @@
  * Firestore 互換のソートキーエンコーディング
  *
  * フィールド値を「文字列比較（memcmp）が Firestore の値順序と一致する」キーへ変換する。
- * これにより SQLite の WHERE / ORDER BY で本家 Firestore と同じ比較セマンティクスを実現する。
+ * サーバーは SQLite の WHERE / ORDER BY（`firestore_key` UDF）で、クライアントは
+ * ローカルクエリ評価（query-matcher）で同一の比較セマンティクスを共有する。
  *
  * Firestore の型順序（昇順）:
  *   null < boolean < number < Timestamp < string < Bytes
@@ -10,6 +11,8 @@
  *
  * 各キーは1文字の型タグで始まり、同型内の順序を保存する形で値をエンコードする。
  * 型タグは ASCII 順に並んでいるため、型をまたいだ比較も正しく行われる。
+ *
+ * ブラウザ互換のため Node.js の Buffer は使わない（DataView / atob ベース）。
  */
 
 /** 型タグ（ASCII 昇順 = Firestore の型順序） */
@@ -45,6 +48,12 @@ function escapeString(s: string): string {
   return result;
 }
 
+/** Base64 文字列を latin1（バイト値そのままの文字列）へデコードする */
+function base64ToLatin1(b64: string): string {
+  // atob はブラウザ / Node.js 16+ の両方でグローバルに利用可能
+  return atob(b64);
+}
+
 /**
  * 数値を順序を保存する16文字の hex 文字列にエンコードする
  *
@@ -57,15 +66,21 @@ export function encodeNumber(n: number): string {
   if (Number.isNaN(n)) {
     return "0".repeat(16);
   }
-  const buf = Buffer.alloc(8);
+  const buf = new ArrayBuffer(8);
+  const view = new DataView(buf);
   // -0 と 0 は Firestore では等値
-  buf.writeDoubleBE(n === 0 ? 0 : n, 0);
-  if (buf[0] & 0x80) {
-    for (let i = 0; i < 8; i++) buf[i] = ~buf[i] & 0xff;
+  view.setFloat64(0, n === 0 ? 0 : n, false /* big-endian */);
+  const bytes = new Uint8Array(buf);
+  if (bytes[0] & 0x80) {
+    for (let i = 0; i < 8; i++) bytes[i] = ~bytes[i] & 0xff;
   } else {
-    buf[0] |= 0x80;
+    bytes[0] |= 0x80;
   }
-  return buf.toString("hex");
+  let hex = "";
+  for (let i = 0; i < 8; i++) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return hex;
 }
 
 interface SerializedWrapper {
@@ -114,7 +129,7 @@ export function valueKey(value: unknown): string {
         );
       }
       case "bytes": {
-        const binary = Buffer.from(String(value.value), "base64").toString("latin1");
+        const binary = base64ToLatin1(String(value.value));
         return TYPE_TAG.bytes + escapeString(binary) + TERMINATOR;
       }
       case "reference": {
