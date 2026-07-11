@@ -205,6 +205,16 @@ export class LocalStore {
     return paths;
   }
 
+  /**
+   * ローカルストアが状態を知っている（キャッシュ済みまたは pending write のある）
+   * 全ドキュメントパスの集合を返す（getDocsFromCache 用）。
+   */
+  getKnownPaths(): Set<string> {
+    const paths = new Set<string>(this.remoteDocs.keys());
+    for (const path of this.getPendingPaths()) paths.add(path);
+    return paths;
+  }
+
   // ──────────────────────────────────────────────
   // ローカルビュー合成
   // ──────────────────────────────────────────────

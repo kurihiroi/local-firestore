@@ -9,12 +9,17 @@ import type {
   VectorDistanceMeasure,
   WhereFilterOp,
 } from "@local-firestore/shared";
-import { validateQueryFilters } from "@local-firestore/shared";
+import {
+  applyQueryConstraints,
+  matchesCollection,
+  validateQueryFilters,
+} from "@local-firestore/shared";
+import { getLocalStore } from "./local-store.js";
 import { deserializeData, serializeValue } from "./serialization.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
 import type { CollectionReference, Firestore } from "./types.js";
-import { DocumentSnapshot, FieldPath } from "./types.js";
+import { DocumentSnapshot, FieldPath, SnapshotMetadata } from "./types.js";
 import { VectorValue } from "./vector.js";
 
 // ============================================================
@@ -378,6 +383,18 @@ export async function getDocs<T = DocumentData>(
   const converter = q._converter;
 
   const firestore = q._firestore;
+
+  // 結果をサーバー確定値としてローカルストアへ反映する（キャッシュ読み取り・
+  // acknowledged mutation の解決に使われる）
+  getLocalStore(firestore).applyRemoteDocs(
+    res.docs.map((d) => ({
+      path: d.path,
+      exists: true,
+      data: d.data,
+      createTime: d.createTime,
+      updateTime: d.updateTime,
+    })),
+  );
   const docs = res.docs.map((d) => {
     const segments = d.path.split("/");
     const docId = segments[segments.length - 1];
@@ -434,3 +451,91 @@ export function validateConstraints(constraints: SerializedQueryConstraint[]): v
     throw new FirestoreError("invalid-argument", filterError);
   }
 }
+
+/**
+ * クエリをローカルキャッシュから実行する（本家互換）
+ *
+ * ローカルストアが知っている全ドキュメント（サーバー確定値 + pending write の
+ * overlay）に対してクエリ制約をローカル評価し、`fromCache: true` の
+ * スナップショットを返す。本家同様「キャッシュにある範囲の結果」であり、
+ * サーバーの全データに対する結果とは限らない。
+ */
+export async function getDocsFromCache<T = DocumentData>(
+  queryOrRef: Query<T> | CollectionReference<T>,
+): Promise<QuerySnapshot<T>> {
+  const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
+
+  validateConstraints(q.constraints);
+  if (q.constraints.some((c) => c.type === "findNearest")) {
+    throw new FirestoreError("unavailable", "findNearest queries cannot be executed from cache");
+  }
+
+  const firestore = q._firestore;
+  const localStore = getLocalStore(firestore);
+  const candidates: Array<{
+    path: string;
+    data: DocumentData;
+    createTime: string | null;
+    updateTime: string | null;
+    hasPendingWrites: boolean;
+  }> = [];
+  for (const path of localStore.getKnownPaths()) {
+    if (!matchesCollection(path, q.collectionPath, q.collectionGroup)) continue;
+    const composed = localStore.composeDocument(path);
+    if (composed?.exists && composed.data) {
+      candidates.push({
+        path,
+        data: composed.data,
+        createTime: composed.createTime,
+        updateTime: composed.updateTime,
+        hasPendingWrites: composed.hasPendingWrites,
+      });
+    }
+  }
+
+  const results = applyQueryConstraints(
+    candidates,
+    q.collectionPath,
+    q.collectionGroup,
+    q.constraints,
+  );
+
+  const converter = q._converter;
+  const docs = results.map((d) => {
+    const segments = d.path.split("/");
+    const docId = segments[segments.length - 1];
+    const metadata = new SnapshotMetadata(d.hasPendingWrites, true);
+    let docData = deserializeData(d.data, firestore);
+    if (converter) {
+      const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+        d.path,
+        docId,
+        docData,
+        d.createTime ?? "",
+        d.updateTime ?? "",
+        firestore,
+      );
+      docData = converter.fromFirestore(rawSnapshot) as DocumentData;
+    }
+    return new QueryDocumentSnapshot<T>(
+      d.path,
+      docId,
+      docData as T,
+      d.createTime ?? "",
+      d.updateTime ?? "",
+      firestore,
+      metadata,
+    );
+  });
+
+  const hasPendingWrites = results.some((d) => d.hasPendingWrites);
+  return new QuerySnapshot<T>(
+    docs,
+    undefined,
+    queryOrRef,
+    new SnapshotMetadata(hasPendingWrites, true),
+  );
+}
+
+/** クエリをサーバーで実行する（getDocs のエイリアス、本家互換） */
+export const getDocsFromServer = getDocs;

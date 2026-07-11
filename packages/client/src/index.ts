@@ -29,7 +29,15 @@ export { queryEqual, refEqual, snapshotEqual } from "./comparisons.js";
 export type { ConnectionState, ReconnectOptions } from "./connection.js";
 export { ConnectionManager, getConnectionManager } from "./connection.js";
 // CRUD operations
-export { addDoc, deleteDoc, getDoc, setDoc, updateDoc } from "./crud.js";
+export {
+  addDoc,
+  deleteDoc,
+  getDoc,
+  getDocFromCache,
+  getDocFromServer,
+  setDoc,
+  updateDoc,
+} from "./crud.js";
 // FieldValue helpers
 export {
   arrayRemove,
@@ -82,6 +90,8 @@ export {
   endBefore,
   findNearest,
   getDocs,
+  getDocsFromCache,
+  getDocsFromServer,
   limit,
   limitToLast,
   or,
