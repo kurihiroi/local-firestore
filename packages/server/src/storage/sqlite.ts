@@ -1,12 +1,60 @@
 import type { VectorDistanceMeasure } from "@local-firestore/shared";
 import { arrayContainsKey, computeFirestoreKey, pathOrderKey } from "@local-firestore/shared";
 import Database from "better-sqlite3";
+import CipherDatabase from "better-sqlite3-multiple-ciphers";
 import { initSchema } from "./schema.js";
 
-export function createDatabase(path: string = ":memory:"): Database.Database {
-  const db = new Database(path);
+/** データベースファイルが現在の暗号化設定で読めないときのエラー */
+export class DatabaseOpenError extends Error {
+  constructor(path: string, hasEncryptionKey: boolean) {
+    super(
+      hasEncryptionKey
+        ? `Failed to open database "${path}" with the provided DB_ENCRYPTION_KEY. ` +
+            `The key is wrong, or the file is not encrypted. To encrypt an existing ` +
+            `unencrypted database, export its data from a server running without ` +
+            `DB_ENCRYPTION_KEY (GET /export), then import it into a fresh server ` +
+            `started with DB_ENCRYPTION_KEY (POST /import).`
+        : `Failed to open database "${path}". The file may be encrypted — ` +
+            `if so, set DB_ENCRYPTION_KEY to the key it was created with.`,
+    );
+    this.name = "DatabaseOpenError";
+  }
+}
 
-  db.pragma("journal_mode = WAL");
+export interface CreateDatabaseOptions {
+  /**
+   * at-rest 暗号化キー（`DB_ENCRYPTION_KEY`）。指定時は better-sqlite3-multiple-ciphers
+   * で暗号化データベースとして開く。`:memory:` データベースでは無視される
+   * （永続化されないため暗号化対象がない）。
+   */
+  encryptionKey?: string;
+}
+
+export function createDatabase(
+  path: string = ":memory:",
+  options: CreateDatabaseOptions = {},
+): Database.Database {
+  const encryptionKey = path === ":memory:" ? undefined : options.encryptionKey;
+
+  // better-sqlite3-multiple-ciphers は better-sqlite3 と API 互換
+  const db: Database.Database = encryptionKey ? new CipherDatabase(path) : new Database(path);
+
+  if (encryptionKey) {
+    // key プラグマは他のあらゆる操作より先に実行する必要がある
+    // （SQL 文字列リテラルとして埋め込むため ' をエスケープ）
+    db.pragma(`key='${encryptionKey.replace(/'/g, "''")}'`);
+  }
+
+  try {
+    // 最初のファイルアクセスで鍵の正誤・暗号化有無の不一致を検出する
+    db.pragma("journal_mode = WAL");
+  } catch (err) {
+    db.close();
+    if ((err as { code?: string }).code === "SQLITE_NOTADB") {
+      throw new DatabaseOpenError(path, encryptionKey !== undefined);
+    }
+    throw err;
+  }
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");

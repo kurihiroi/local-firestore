@@ -19,7 +19,7 @@ import { TriggerService } from "./services/trigger.js";
 import type { TtlPolicy } from "./services/ttl.js";
 import { matchesCollectionPattern, TtlService } from "./services/ttl.js";
 import { DocumentRepository } from "./storage/repository.js";
-import { createDatabase } from "./storage/sqlite.js";
+import { createDatabase, DatabaseOpenError } from "./storage/sqlite.js";
 import { createTlsServer, getTlsOptionsFromEnv } from "./tls.js";
 import { acquireProcessLock, ProcessLockError } from "./utils/process-lock.js";
 import { attachWebSocket } from "./websocket.js";
@@ -127,7 +127,7 @@ function runMigrate(args: string[]): void {
   const dbPath = process.env.DB_PATH || "local-firestore.db";
   const dryRun = args.includes("--dry-run");
 
-  const db = createDatabase(dbPath);
+  const db = createDatabase(dbPath, { encryptionKey: process.env.DB_ENCRYPTION_KEY });
   const report = migrateDatabase(db, { dryRun });
   db.close();
 
@@ -175,7 +175,22 @@ async function main() {
     throw err;
   }
 
-  const db = createDatabase(dbPath);
+  // at-rest 暗号化（DB_ENCRYPTION_KEY 指定時のみ有効）
+  const encryptionKey = process.env.DB_ENCRYPTION_KEY;
+  if (encryptionKey) {
+    logger.info("At-rest encryption enabled (DB_ENCRYPTION_KEY)");
+  }
+
+  let db: ReturnType<typeof createDatabase>;
+  try {
+    db = createDatabase(dbPath, { encryptionKey });
+  } catch (err) {
+    if (err instanceof DatabaseOpenError) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
   const repo = new DocumentRepository(db);
   const documentService = new DocumentService(repo);
   const queryService = new QueryService(db);
@@ -192,8 +207,9 @@ async function main() {
   // 複合インデックスのバリデーション（INDEXES_PATH 指定時のみ有効）
   const indexManager = createIndexManager(logger);
 
-  // マルチデータベース対応（/databases/:databaseId/* で独立した SQLite ファイルを使用）
-  const databaseManager = new DatabaseManager(dbPath);
+  // マルチデータベース対応（/databases/:databaseId/* で独立した SQLite ファイルを使用。
+  // 暗号化キーは全データベースで共通）
+  const databaseManager = new DatabaseManager(dbPath, { encryptionKey });
 
   const app = createApp(db, listenerManager, {
     logger,
