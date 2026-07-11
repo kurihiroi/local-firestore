@@ -1,5 +1,5 @@
 import type { VectorDistanceMeasure } from "@local-firestore/shared";
-import { arrayContainsKey, computeFirestoreKey } from "@local-firestore/shared";
+import { arrayContainsKey, computeFirestoreKey, pathOrderKey } from "@local-firestore/shared";
 import Database from "better-sqlite3";
 import { initSchema } from "./schema.js";
 
@@ -24,6 +24,10 @@ export function createDatabase(path: string = ":memory:"): Database.Database {
  * - firestore_key(json) -> string | null
  *   JSON 値（`data -> '$.field'` の出力）を Firestore の値順序を保存するキーに変換する。
  *   フィールド欠損（SQL NULL）の場合は NULL を返し、比較・ソート対象から除外される。
+ * - firestore_path_key(path) -> string | null
+ *   ドキュメントパスを完全リソース名のセグメント順を保存するキーに変換する
+ *   （`__name__` の ORDER BY / カーソル比較用。生の path 文字列比較では
+ *   "/" より小さい文字を含む ID で本家と順序が食い違う）。
  * - firestore_arr_contains(json, elementKey) -> 0 | 1
  * - firestore_arr_contains_any(json, elementKeysJson) -> 0 | 1
  */
@@ -31,6 +35,11 @@ function registerFirestoreKeyFunctions(db: Database.Database): void {
   db.function("firestore_key", { deterministic: true }, (json: unknown): string | null => {
     if (json === null || json === undefined) return null;
     return computeFirestoreKey(String(json));
+  });
+
+  db.function("firestore_path_key", { deterministic: true }, (path: unknown): string | null => {
+    if (typeof path !== "string") return null;
+    return pathOrderKey(path);
   });
 
   db.function(

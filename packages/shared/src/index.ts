@@ -3,6 +3,7 @@ export {
   computeFirestoreKey,
   encodeNumber,
   nextTypeTag,
+  pathOrderKey,
   TYPE_TAG,
   valueKey,
   valueTypeTag,

@@ -12,6 +12,7 @@ import type {
 } from "@local-firestore/shared";
 import {
   nextTypeTag,
+  pathOrderKey,
   TYPE_TAG,
   validateQueryFilters,
   valueKey,
@@ -30,7 +31,7 @@ export class QueryValidationError extends Error {
 
 /** 実効 orderBy（暗黙の __name__ タイブレークを含む） */
 interface OrderKey {
-  /** SQL 式（firestore_key(...) または path カラム） */
+  /** SQL 式（firestore_key(...) または firestore_path_key(path)） */
   expr: string;
   direction: "asc" | "desc";
   /** __name__（ドキュメントパス）順序かどうか */
@@ -284,7 +285,12 @@ function buildOrderKeys(
     explicitFields.add(o.fieldPath);
     keys.push(
       o.fieldPath === "__name__"
-        ? { expr: "path", direction: o.direction, isName: true, fieldPath: "__name__" }
+        ? {
+            expr: "firestore_path_key(path)",
+            direction: o.direction,
+            isName: true,
+            fieldPath: "__name__",
+          }
         : {
             expr: fieldKeyExpr(o.fieldPath),
             direction: o.direction,
@@ -314,7 +320,12 @@ function buildOrderKeys(
   // 暗黙の __name__ タイブレーク
   if (!explicitFields.has("__name__")) {
     const lastDirection = keys.length > 0 ? keys[keys.length - 1].direction : "asc";
-    keys.push({ expr: "path", direction: lastDirection, isName: true, fieldPath: "__name__" });
+    keys.push({
+      expr: "firestore_path_key(path)",
+      direction: lastDirection,
+      isName: true,
+      fieldPath: "__name__",
+    });
   }
 
   return keys;
@@ -502,7 +513,7 @@ function buildCursorClause(
     exprs.push(o.expr);
     if (o.isName) {
       const raw = String(cursor.values[i]);
-      cursorParams.push(raw.includes("/") ? raw : `${collectionPath}/${raw}`);
+      cursorParams.push(pathOrderKey(raw.includes("/") ? raw : `${collectionPath}/${raw}`));
     } else {
       cursorParams.push(valueKey(cursor.values[i]));
     }

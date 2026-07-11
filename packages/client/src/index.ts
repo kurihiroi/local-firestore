@@ -13,6 +13,8 @@ export type { AggregateSpec, AggregateSpecData } from "./aggregate.js";
 export {
   AggregateField,
   AggregateQuerySnapshot,
+  aggregateFieldEqual,
+  aggregateQuerySnapshotEqual,
   average,
   count,
   getAggregateFromServer,

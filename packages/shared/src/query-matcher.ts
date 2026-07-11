@@ -1,4 +1,4 @@
-import { nextTypeTag, TYPE_TAG, valueKey, valueTypeTag } from "./firestore-key.js";
+import { nextTypeTag, pathOrderKey, TYPE_TAG, valueKey, valueTypeTag } from "./firestore-key.js";
 import type {
   DocumentData,
   SerializedCompositeFilterConstraint,
@@ -243,7 +243,8 @@ function buildOrderKeys(constraints: ReadonlyArray<SerializedQueryConstraint>): 
 /** 実効 orderBy に沿った比較用キータプルを返す */
 function sortKeyTuple(doc: MatchableDocument, orderKeys: OrderKey[]): string[] {
   return orderKeys.map((o) => {
-    if (o.isName) return doc.path;
+    // __name__ は完全リソース名のセグメント順（サーバーの firestore_path_key と同一）
+    if (o.isName) return pathOrderKey(doc.path);
     // matchesQueryFilters で欠損は除外済みだが、暗黙不等式ソートのフィールドも
     // フィルタで欠損除外されるため、ここでは存在を仮定できる。念のため欠損は最小扱い。
     return fieldKey(doc.data, o.fieldPath) ?? "";
@@ -262,7 +263,7 @@ function cursorKeyTuple(
     const o = orderKeys[i];
     if (o.isName) {
       const raw = String(cursor.values[i]);
-      keys.push(raw.includes("/") ? raw : `${collectionPath}/${raw}`);
+      keys.push(pathOrderKey(raw.includes("/") ? raw : `${collectionPath}/${raw}`));
     } else {
       keys.push(valueKey(cursor.values[i]));
     }

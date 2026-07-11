@@ -83,6 +83,21 @@ export function encodeNumber(n: number): string {
   return hex;
 }
 
+/**
+ * ドキュメントパスをセグメント単位の順序を保存するキーへ変換する
+ *
+ * 本家 Firestore の `__name__` 順序は完全リソース名のセグメント単位の比較。
+ * 生のパス文字列比較では "/"（U+002F）より小さい文字（"-" 等）を ID に含むとき
+ * 順序が壊れるため（例: "user-1/posts/x" < "user/posts/y" になってしまう）、
+ * 各セグメントを終端文字付きでエスケープして memcmp = セグメント順にする。
+ */
+export function pathOrderKey(path: string): string {
+  return path
+    .split("/")
+    .map((s) => escapeString(s) + TERMINATOR)
+    .join("");
+}
+
 interface SerializedWrapper {
   __type: string;
   [key: string]: unknown;
@@ -134,12 +149,7 @@ export function valueKey(value: unknown): string {
       }
       case "reference": {
         // パスセグメント単位の比較になるよう "/" を終端文字と同値に扱う
-        const segments = String(value.value).split("/");
-        return (
-          TYPE_TAG.reference +
-          segments.map((s) => escapeString(s) + TERMINATOR).join("") +
-          TERMINATOR
-        );
+        return TYPE_TAG.reference + pathOrderKey(String(value.value)) + TERMINATOR;
       }
       case "geopoint": {
         const v = value.value as { latitude: number; longitude: number };

@@ -36,6 +36,9 @@ const FIXTURE_DOCS: Array<{ path: string; data: Record<string, unknown> }> = [
   { path: "shelf/s1/items/x", data: { n: 10, s: "xigua" } },
   { path: "shelf/s2/items/y", data: { n: -10, s: "yuzu" } },
   { path: "shelf/s1/other/z", data: { n: 999 } },
+  // "/" より小さい文字（"-"）を含む親 ID: 生パス比較とセグメント順が食い違うケース
+  { path: "shelf/s/items/v", data: { n: 5, s: "vanilla" } },
+  { path: "shelf/s-1/items/w", data: { n: 6, s: "wasabi" } },
 ];
 
 /** フィクスチャ: 代表的なクエリ制約の組合せ */
@@ -212,6 +215,12 @@ const FIXTURE_QUERIES: Array<{
     collectionPath: "items",
     collectionGroup: true,
     constraints: [{ type: "orderBy", fieldPath: "n", direction: "desc" }],
+  },
+  {
+    name: "コレクショングループ + __name__ カーソル（セグメント順）",
+    collectionPath: "items",
+    collectionGroup: true,
+    constraints: [{ type: "startAfter", values: ["shelf/s/items/v"] }],
   },
 ];
 
