@@ -10,8 +10,9 @@ import { getLocalStore } from "./local-store.js";
 import { doc } from "./references.js";
 import { deserializeData, type SerializeOptions, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
+import { FirestoreError } from "./transport.js";
 import type { CollectionReference, DocumentReference } from "./types.js";
-import { DocumentSnapshot, FieldPath } from "./types.js";
+import { DocumentSnapshot, FieldPath, SnapshotMetadata } from "./types.js";
 
 const AUTO_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -63,6 +64,52 @@ export async function getDoc<T = DocumentData>(
 
   return new DocumentSnapshot<T>(reference, data as T | null, res.createTime, res.updateTime);
 }
+
+/**
+ * ドキュメントをローカルキャッシュから取得する（本家互換）
+ *
+ * ローカルビュー（サーバー確定値 + pending write の overlay）を返す。
+ * キャッシュ未命中（一度も観測しておらず pending write もない）の場合は
+ * 本家同様 `unavailable` エラーを投げる。metadata は `fromCache: true`。
+ */
+export async function getDocFromCache<T = DocumentData>(
+  reference: DocumentReference<T>,
+): Promise<DocumentSnapshot<T>> {
+  const composed = getLocalStore(reference._firestore).composeDocument(reference.path);
+  if (!composed) {
+    throw new FirestoreError(
+      "unavailable",
+      "Failed to get document from cache. (However, this document may exist on the server. " +
+        "Run again without source set to 'cache' to attempt to retrieve the document from the server.)",
+    );
+  }
+
+  const metadata = new SnapshotMetadata(composed.hasPendingWrites, true);
+  let data: DocumentData | null = composed.exists
+    ? deserializeData(composed.data as DocumentData, reference._firestore)
+    : null;
+  if (data && reference._converter) {
+    const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+      reference.path,
+      reference.id,
+      data,
+      composed.createTime ?? "",
+      composed.updateTime ?? "",
+      reference._firestore,
+    );
+    data = reference._converter.fromFirestore(rawSnapshot) as DocumentData;
+  }
+  return new DocumentSnapshot<T>(
+    reference,
+    data as T | null,
+    composed.createTime,
+    composed.updateTime,
+    metadata,
+  );
+}
+
+/** ドキュメントをサーバーから取得する（getDoc のエイリアス、本家互換） */
+export const getDocFromServer = getDoc;
 
 /** ドキュメントを作成/上書きする */
 export async function setDoc<T = DocumentData>(
