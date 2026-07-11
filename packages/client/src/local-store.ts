@@ -164,9 +164,45 @@ export class LocalStore {
     this.notify(released);
   }
 
+  /**
+   * 複数のサーバー確定スナップショットをまとめて反映し、変更通知を1回にまとめる
+   * （クエリスナップショット受信時に使用。ドキュメントごとの通知だと
+   * クエリリスナーが結果1件ごとに再評価・発火してしまうため）。
+   */
+  applyRemoteDocs(
+    docs: ReadonlyArray<{
+      path: string;
+      exists: boolean;
+      data: DocumentData | null;
+      createTime: string | null;
+      updateTime: string | null;
+    }>,
+  ): void {
+    for (const d of docs) {
+      this.remoteDocs.set(d.path, {
+        exists: d.exists,
+        data: d.data,
+        createTime: d.createTime,
+        updateTime: d.updateTime,
+      });
+    }
+    const released = this.releaseSettledMutations();
+    for (const d of docs) released.add(d.path);
+    this.notify(released);
+  }
+
   /** サーバー確定スナップショットを取得する（未観測なら undefined） */
   getRemoteDoc(path: string): RemoteDoc | undefined {
     return this.remoteDocs.get(path);
+  }
+
+  /** pending / acknowledged mutation が書き込み対象にしているパスの集合を返す */
+  getPendingPaths(): Set<string> {
+    const paths = new Set<string>();
+    for (const m of this.mutations) {
+      for (const op of m.operations) paths.add(op.path);
+    }
+    return paths;
   }
 
   // ──────────────────────────────────────────────
