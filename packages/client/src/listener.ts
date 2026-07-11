@@ -1,11 +1,11 @@
 import type {
-  DocumentChangeData,
   DocumentData,
   FirestoreDataConverter,
   FirestoreErrorCode,
   SerializedQueryConstraint,
   ServerMessage,
 } from "@local-firestore/shared";
+import { applyQueryConstraints, matchesCollection } from "@local-firestore/shared";
 import { type ConnectionManager, getConnectionManager } from "./connection.js";
 import { type ComposedDocument, getLocalStore } from "./local-store.js";
 import type { Query } from "./query.js";
@@ -55,6 +55,15 @@ interface DocCallback<T = DocumentData> {
   };
 }
 
+/** クエリリスナーが保持する「最後に発火した結果集合」の1件（ワイヤ形式） */
+interface EmittedQueryDoc {
+  path: string;
+  data: DocumentData;
+  createTime: string | null;
+  updateTime: string | null;
+  hasPendingWrites: boolean;
+}
+
 interface QueryCallback<T = DocumentData> {
   kind: "query";
   onNext: (snapshot: QuerySnapshot<T>) => void;
@@ -62,6 +71,20 @@ interface QueryCallback<T = DocumentData> {
   converter: FirestoreDataConverter<T> | null;
   firestore: Firestore;
   queryOrRef: Query<T> | CollectionReference<T>;
+  collectionPath: string;
+  collectionGroup: boolean;
+  constraints: SerializedQueryConstraint[];
+  /** findNearest クエリはローカル評価の対象外（サーバースナップショットのみ） */
+  hasFindNearest: boolean;
+  includeMetadataChanges: boolean;
+  /**
+   * 最後に発火した結果集合。docChanges() は常にこれとの差分で合成する
+   * （初回は undefined = 全件 added。再接続時のフル再購読も自然に差分になる）
+   */
+  lastEmittedDocs?: EmittedQueryDoc[];
+  lastMetadata?: { hasPendingWrites: boolean; fromCache: boolean };
+  /** サーバーからの初回スナップショットを受信済みか（fromCache 判定） */
+  receivedServerSnapshot: boolean;
 }
 
 type SubscriptionCallback = DocCallback<unknown> | QueryCallback<unknown>;
@@ -104,19 +127,254 @@ function getSnapshotCache(firestore: Firestore): SnapshotCache {
  */
 const localStoreSubscribed = new WeakSet<Firestore>();
 
+/**
+ * サーバースナップショット処理中のサブスクリプションID。
+ * LocalStore への一括反映が発する変更イベントで、当該クエリ自身が
+ * ローカル再評価（不完全な membership 判定）してしまうのを防ぐ。
+ */
+let processingServerSnapshotFor: string | null = null;
+
 function ensureLocalStoreSubscription(firestore: Firestore): void {
   if (localStoreSubscribed.has(firestore)) return;
   localStoreSubscribed.add(firestore);
 
   getLocalStore(firestore).onChange((changedPaths) => {
-    for (const cb of subscriptionCallbacks.values()) {
-      if (cb.kind !== "doc") continue;
-      const docCb = cb as DocCallback<unknown>;
-      if (docCb.ref._firestore !== firestore) continue;
-      if (!changedPaths.has(docCb.ref.path)) continue;
-      emitComposedDocSnapshot(docCb, firestore);
+    for (const [subscriptionId, cb] of subscriptionCallbacks) {
+      if (cb.kind === "doc") {
+        const docCb = cb as DocCallback<unknown>;
+        if (docCb.ref._firestore !== firestore) continue;
+        if (!changedPaths.has(docCb.ref.path)) continue;
+        emitComposedDocSnapshot(docCb, firestore);
+      } else {
+        const queryCb = cb as QueryCallback<unknown>;
+        if (queryCb.firestore !== firestore) continue;
+        if (subscriptionId === processingServerSnapshotFor) continue;
+        const affected = [...changedPaths].filter((p) =>
+          matchesCollection(p, queryCb.collectionPath, queryCb.collectionGroup),
+        );
+        if (affected.length === 0) continue;
+        recomputeQueryLocally(queryCb, affected, firestore);
+      }
     }
   });
+}
+
+/** 前回発火した結果集合と新しい結果集合から docChanges を合成する */
+function computeQueryDiff(
+  oldDocs: ReadonlyArray<EmittedQueryDoc>,
+  newDocs: ReadonlyArray<EmittedQueryDoc>,
+): Array<{ type: DocumentChangeType; doc: EmittedQueryDoc; oldIndex: number; newIndex: number }> {
+  const changes: Array<{
+    type: DocumentChangeType;
+    doc: EmittedQueryDoc;
+    oldIndex: number;
+    newIndex: number;
+  }> = [];
+  const oldIndexByPath = new Map(oldDocs.map((d, i) => [d.path, i] as const));
+  const newPaths = new Set(newDocs.map((d) => d.path));
+
+  for (let i = 0; i < newDocs.length; i++) {
+    const doc = newDocs[i];
+    const oldIndex = oldIndexByPath.get(doc.path);
+    if (oldIndex === undefined) {
+      changes.push({ type: "added", doc, oldIndex: -1, newIndex: i });
+    } else {
+      const old = oldDocs[oldIndex];
+      if (
+        JSON.stringify(old.data) !== JSON.stringify(doc.data) ||
+        old.updateTime !== doc.updateTime
+      ) {
+        changes.push({ type: "modified", doc, oldIndex, newIndex: i });
+      }
+    }
+  }
+  for (let i = 0; i < oldDocs.length; i++) {
+    const doc = oldDocs[i];
+    if (!newPaths.has(doc.path)) {
+      changes.push({ type: "removed", doc, oldIndex: i, newIndex: -1 });
+    }
+  }
+  return changes;
+}
+
+/** ワイヤ形式の EmittedQueryDoc から QueryDocumentSnapshot を構築する */
+function buildQueryDocSnapshot(
+  queryCb: QueryCallback<unknown>,
+  doc: EmittedQueryDoc,
+  fromCache: boolean,
+): QueryDocumentSnapshot<DocumentData> {
+  const fs = queryCb.firestore;
+  const docId = getDocIdFromPath(doc.path);
+  const metadata = new SnapshotMetadata(doc.hasPendingWrites, fromCache);
+  let data = deserializeData(doc.data, fs);
+  if (queryCb.converter) {
+    const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+      doc.path,
+      docId,
+      data,
+      doc.createTime ?? "",
+      doc.updateTime ?? "",
+      fs,
+    );
+    data = queryCb.converter.fromFirestore(rawSnapshot) as DocumentData;
+  }
+  return new QueryDocumentSnapshot(
+    doc.path,
+    docId,
+    data,
+    doc.createTime ?? "",
+    doc.updateTime ?? "",
+    fs,
+    metadata,
+  );
+}
+
+/**
+ * クエリリスナーへ結果集合を発火する（サーバー / ローカル共通の統一パス）。
+ * docChanges は常に前回発火した結果集合との差分で合成する。
+ */
+function emitQueryResult(
+  queryCb: QueryCallback<unknown>,
+  newDocs: EmittedQueryDoc[],
+  fromCache: boolean,
+): void {
+  const changes = computeQueryDiff(queryCb.lastEmittedDocs ?? [], newDocs);
+  const hasPendingWrites = newDocs.some((d) => d.hasPendingWrites);
+  const metadataChanged =
+    !queryCb.lastMetadata ||
+    queryCb.lastMetadata.hasPendingWrites !== hasPendingWrites ||
+    queryCb.lastMetadata.fromCache !== fromCache;
+
+  const isFirstEmission = queryCb.lastEmittedDocs === undefined;
+  if (!isFirstEmission && changes.length === 0) {
+    // データ変更なし: metadata のみの変更は includeMetadataChanges 指定時のみ発火
+    if (!metadataChanged || !queryCb.includeMetadataChanges) return;
+  }
+
+  queryCb.lastEmittedDocs = newDocs;
+  queryCb.lastMetadata = { hasPendingWrites, fromCache };
+
+  const docs = newDocs.map((d) => buildQueryDocSnapshot(queryCb, d, fromCache));
+  const docByPath = new Map(docs.map((d) => [d.path, d] as const));
+  const documentChanges: DocumentChange<DocumentData>[] = changes.map((ch) => ({
+    type: ch.type,
+    doc: docByPath.get(ch.doc.path) ?? buildQueryDocSnapshot(queryCb, ch.doc, fromCache),
+    oldIndex: ch.oldIndex,
+    newIndex: ch.newIndex,
+  }));
+
+  const snapshot = new QuerySnapshot(
+    docs,
+    documentChanges,
+    queryCb.queryOrRef,
+    new SnapshotMetadata(hasPendingWrites, fromCache),
+  );
+  queryCb.onNext(snapshot as QuerySnapshot<unknown>);
+}
+
+/**
+ * ローカル変更（mutation の enqueue / ロールバック / 個別ドキュメントの確定）を
+ * クエリ結果へ反映する。前回結果集合の該当パスをローカルビューで更新し、
+ * クエリ制約（filter / orderBy / cursor / limit）を shared の QueryMatcher で再評価する。
+ */
+function recomputeQueryLocally(
+  queryCb: QueryCallback<unknown>,
+  affectedPaths: string[],
+  firestore: Firestore,
+): void {
+  // 初回サーバースナップショット前は結果集合が不明なためローカル評価しない
+  if (!queryCb.lastEmittedDocs) return;
+  // findNearest（ベクトル距離順）はローカル評価できない
+  if (queryCb.hasFindNearest) return;
+
+  const localStore = getLocalStore(firestore);
+  const candidates = new Map(queryCb.lastEmittedDocs.map((d) => [d.path, d] as const));
+
+  for (const path of affectedPaths) {
+    const composed = localStore.composeDocument(path);
+    if (!composed) continue; // 状態不明のパスは前回の情報を維持
+    if (composed.exists && composed.data) {
+      candidates.set(path, {
+        path,
+        data: composed.data,
+        createTime: composed.createTime,
+        updateTime: composed.updateTime,
+        hasPendingWrites: composed.hasPendingWrites,
+      });
+    } else {
+      candidates.delete(path);
+    }
+  }
+
+  const result = applyQueryConstraints(
+    [...candidates.values()],
+    queryCb.collectionPath,
+    queryCb.collectionGroup,
+    queryCb.constraints,
+  );
+  emitQueryResult(queryCb, result, !queryCb.receivedServerSnapshot);
+}
+
+/**
+ * サーバーのクエリスナップショットを反映して発火する。
+ * 受信結果を membership の正として、pending mutation の overlay を重ねる。
+ */
+function emitQueryFromServer(
+  queryCb: QueryCallback<unknown>,
+  serverDocs: ReadonlyArray<{
+    path: string;
+    data: DocumentData;
+    createTime: string;
+    updateTime: string;
+  }>,
+  firestore: Firestore,
+): void {
+  const localStore = getLocalStore(firestore);
+  const candidates = new Map<string, EmittedQueryDoc>();
+
+  for (const d of serverDocs) {
+    const composed = localStore.composeDocument(d.path);
+    if (composed && !composed.exists) continue; // pending delete は除外
+    candidates.set(d.path, {
+      path: d.path,
+      data: composed?.data ?? d.data,
+      createTime: d.createTime,
+      updateTime: d.updateTime,
+      hasPendingWrites: composed?.hasPendingWrites ?? false,
+    });
+  }
+
+  // サーバー結果に含まれない pending write のドキュメントも候補に加える
+  // （書き込み直後でまだサーバースナップショットに反映されていないもの）
+  if (!queryCb.hasFindNearest) {
+    for (const path of localStore.getPendingPaths()) {
+      if (candidates.has(path)) continue;
+      if (!matchesCollection(path, queryCb.collectionPath, queryCb.collectionGroup)) continue;
+      const composed = localStore.composeDocument(path);
+      if (composed?.exists && composed.data) {
+        candidates.set(path, {
+          path,
+          data: composed.data,
+          createTime: composed.createTime,
+          updateTime: composed.updateTime,
+          hasPendingWrites: composed.hasPendingWrites,
+        });
+      }
+    }
+  }
+
+  // findNearest は距離順をローカルで再現できないためサーバー順をそのまま使う
+  const result = queryCb.hasFindNearest
+    ? serverDocs.map((d) => candidates.get(d.path)).filter((d): d is EmittedQueryDoc => !!d)
+    : applyQueryConstraints(
+        [...candidates.values()],
+        queryCb.collectionPath,
+        queryCb.collectionGroup,
+        queryCb.constraints,
+      );
+
+  queryCb.receivedServerSnapshot = true;
+  emitQueryResult(queryCb, result, false);
 }
 
 /**
@@ -200,14 +458,6 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
       case "query_snapshot": {
         if (cb.kind !== "query") break;
         const queryCb = cb as QueryCallback<unknown>;
-        const conv = queryCb.converter;
-        const fs = queryCb.firestore;
-
-        // クエリ結果の各ドキュメントもサーバー確定値として LocalStore へ反映する
-        // （同一パスの doc リスナーの発火・acknowledged mutation の解決に使われる）
-        for (const d of msg.docs) {
-          localStore.applyRemoteDoc(d.path, true, d.data, d.createTime, d.updateTime);
-        }
 
         // クエリ結果をキャッシュ
         cache.putQuery(
@@ -222,63 +472,28 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
           })),
         );
 
-        const docs = msg.docs.map((d) => {
-          const docId = getDocIdFromPath(d.path);
-          const revived = deserializeData(d.data, fs);
-          if (conv) {
-            const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
-              d.path,
-              docId,
-              revived,
-              d.createTime,
-              d.updateTime,
-              fs,
-            );
-            const converted = conv.fromFirestore(rawSnapshot);
-            return new QueryDocumentSnapshot(
-              d.path,
-              docId,
-              converted as DocumentData,
-              d.createTime,
-              d.updateTime,
-              fs,
-            );
-          }
-          return new QueryDocumentSnapshot(d.path, docId, revived, d.createTime, d.updateTime, fs);
-        });
-        const changes: DocumentChange<DocumentData>[] = msg.changes.map(
-          (ch: DocumentChangeData) => {
-            const docId = getDocIdFromPath(ch.path);
-            const rawData = deserializeData(ch.data ?? {}, fs);
-            let docData: DocumentData = rawData;
-            if (conv) {
-              const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
-                ch.path,
-                docId,
-                rawData,
-                ch.createTime ?? "",
-                ch.updateTime ?? "",
-                fs,
-              );
-              docData = conv.fromFirestore(rawSnapshot) as DocumentData;
-            }
-            return {
-              type: ch.type,
-              doc: new QueryDocumentSnapshot(
-                ch.path,
-                docId,
-                docData,
-                ch.createTime ?? "",
-                ch.updateTime ?? "",
-                fs,
-              ),
-              oldIndex: ch.oldIndex,
-              newIndex: ch.newIndex,
-            };
-          },
-        );
-        const snapshot = new QuerySnapshot(docs, changes, queryCb.queryOrRef);
-        queryCb.onNext(snapshot);
+        // クエリ結果の各ドキュメントをサーバー確定値として LocalStore へ一括反映する
+        // （同一パスの doc リスナーの発火・acknowledged mutation の解決に使われる）。
+        // 一括反映が発する変更イベントで自分自身がローカル再評価しないようガードする
+        processingServerSnapshotFor = msg.subscriptionId;
+        try {
+          localStore.applyRemoteDocs(
+            msg.docs.map((d) => ({
+              path: d.path,
+              exists: true,
+              data: d.data,
+              createTime: d.createTime,
+              updateTime: d.updateTime,
+            })),
+          );
+        } finally {
+          processingServerSnapshotFor = null;
+        }
+
+        // 受信結果を membership の正として overlay を重ねて発火する。
+        // docChanges はサーバーの changes ではなく前回発火した結果集合との差分で
+        // 合成する（再接続時のフル再購読も added / modified / removed の差分になる）
+        emitQueryFromServer(queryCb, msg.docs, firestore);
         break;
       }
       case "error": {
@@ -356,6 +571,7 @@ export function onSnapshotQuery<T = DocumentData>(
   queryOrRef: Query<T> | CollectionReference<T>,
   onNext: (snapshot: QuerySnapshot<T>) => void,
   onError?: (error: FirestoreError) => void,
+  options?: SnapshotListenOptions,
 ): Unsubscribe {
   if (queryOrRef.type === "query") {
     validateConstraints(queryOrRef.constraints);
@@ -364,18 +580,10 @@ export function onSnapshotQuery<T = DocumentData>(
   const firestore = queryOrRef._firestore;
   const manager = getConnectionManager(firestore);
   ensureMessageHandler(manager, firestore);
+  ensureLocalStoreSubscription(firestore);
   manager.connect();
 
   const subscriptionId = generateSubscriptionId();
-
-  subscriptionCallbacks.set(subscriptionId, {
-    kind: "query",
-    onNext: onNext as (snapshot: QuerySnapshot<unknown>) => void,
-    onError,
-    converter: (queryOrRef._converter ?? null) as FirestoreDataConverter<unknown> | null,
-    firestore,
-    queryOrRef: queryOrRef as Query<unknown> | CollectionReference<unknown>,
-  });
 
   let collectionPath: string;
   let collectionGroup: boolean;
@@ -390,6 +598,21 @@ export function onSnapshotQuery<T = DocumentData>(
     collectionGroup = queryOrRef.collectionGroup;
     constraints = queryOrRef.constraints;
   }
+
+  subscriptionCallbacks.set(subscriptionId, {
+    kind: "query",
+    onNext: onNext as (snapshot: QuerySnapshot<unknown>) => void,
+    onError,
+    converter: (queryOrRef._converter ?? null) as FirestoreDataConverter<unknown> | null,
+    firestore,
+    queryOrRef: queryOrRef as Query<unknown> | CollectionReference<unknown>,
+    collectionPath,
+    collectionGroup,
+    constraints,
+    hasFindNearest: constraints.some((c) => c.type === "findNearest"),
+    includeMetadataChanges: options?.includeMetadataChanges ?? false,
+    receivedServerSnapshot: false,
+  });
 
   // 認証トークンは送信のたびに取得する（再接続時にも最新のトークンが使われる）
   const buildMessage = async () =>
@@ -551,6 +774,7 @@ export function onSnapshot<T = DocumentData>(
     target as Query<T> | CollectionReference<T>,
     resolvedOnNext as (snapshot: QuerySnapshot<T>) => void,
     resolvedOnError,
+    listenOptions,
   );
 }
 
