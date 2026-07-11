@@ -112,10 +112,3 @@ export { DocumentSnapshot, FieldPath, SnapshotMetadata, Timestamp } from "./type
 // Vector
 export { VectorValue, vector } from "./vector.js";
 // Write queue (offline support)
-export type {
-  QueuedWrite,
-  WriteOperationType,
-  WriteQueueEvent,
-  WriteQueueListener,
-} from "./write-queue.js";
-export { WriteQueue } from "./write-queue.js";

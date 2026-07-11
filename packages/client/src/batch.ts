@@ -1,11 +1,11 @@
 import type {
   BatchOperation,
-  BatchResponse,
   DocumentData,
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
 import { MAX_WRITE_OPERATIONS } from "@local-firestore/shared";
+import { getLocalStore } from "./local-store.js";
 import { serializeData } from "./serialization.js";
 import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
@@ -77,9 +77,14 @@ export class WriteBatch {
   async commit(): Promise<void> {
     this.ensureNotCommitted();
     this.committed = true;
-    const transport = this.firestore._transport;
-    await transport.post<BatchResponse>("/batch", {
-      operations: this.operations,
-    });
+    // 1つの mutation としてローカルビューへアトミックに反映し、/batch で送信する
+    return getLocalStore(this.firestore).enqueue(
+      this.operations.map((op) => ({
+        type: op.type,
+        path: op.path,
+        data: op.data,
+      })),
+      "batch",
+    );
   }
 }

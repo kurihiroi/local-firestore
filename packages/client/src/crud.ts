@@ -1,16 +1,12 @@
 import type {
-  AddDocumentRequest,
-  AddDocumentResponse,
   DocumentData,
   GetDocumentResponse,
   PartialWithFieldValue,
-  SetDocumentRequest,
   SetOptions,
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
-import { logDebug } from "./logger.js";
-import { getWriteQueue, isNetworkEnabled } from "./network-state.js";
+import { getLocalStore } from "./local-store.js";
 import { doc } from "./references.js";
 import { deserializeData, type SerializeOptions, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
@@ -39,6 +35,16 @@ export async function getDoc<T = DocumentData>(
 ): Promise<DocumentSnapshot<T>> {
   const transport = reference._firestore._transport;
   const res = await transport.get<GetDocumentResponse>(`/docs/${reference.path}`);
+
+  // サーバー確定値としてローカルストアへ反映する（キャッシュ読み取り・
+  // acknowledged mutation の解決に使われる）
+  getLocalStore(reference._firestore).applyRemoteDoc(
+    reference.path,
+    res.exists,
+    res.data,
+    res.createTime,
+    res.updateTime,
+  );
 
   const data = res.exists ? deserializeData(res.data as DocumentData, reference._firestore) : null;
 
@@ -73,25 +79,17 @@ export async function setDoc<T = DocumentData>(
   data: WithFieldValue<T> | PartialWithFieldValue<T>,
   options?: SetOptions,
 ): Promise<void> {
-  const transport = reference._firestore._transport;
   const converted = reference._converter
     ? options
       ? reference._converter.toFirestore(data as PartialWithFieldValue<T>, options)
       : reference._converter.toFirestore(data as WithFieldValue<T>)
     : data;
   const dbData = serializeData(converted as DocumentData, serializeOptionsOf(reference._firestore));
-  if (!isNetworkEnabled(reference._firestore)) {
-    logDebug(`Network disabled, queueing set for ${reference.path}`);
-    getWriteQueue(reference._firestore).enqueue(
-      "set",
-      reference.path,
-      dbData as DocumentData,
-      options,
-    );
-    return;
-  }
-  const body: SetDocumentRequest = { data: dbData as DocumentData, options };
-  await transport.put(`/docs/${reference.path}`, body);
+  // ローカルビューへ即時反映（リスナーが hasPendingWrites: true で発火）し、
+  // サーバー確定（ack）で resolve する
+  return getLocalStore(reference._firestore).enqueue([
+    { type: "set", path: reference.path, data: dbData as DocumentData, options },
+  ]);
 }
 
 /** コレクションに新規ドキュメントを追加する（IDは自動生成） */
@@ -99,23 +97,17 @@ export async function addDoc<T = DocumentData>(
   reference: CollectionReference<T>,
   data: WithFieldValue<T>,
 ): Promise<DocumentReference<T>> {
-  const transport = reference._firestore._transport;
   const converted = reference._converter ? reference._converter.toFirestore(data) : data;
   const dbData = serializeData(converted as DocumentData, serializeOptionsOf(reference._firestore));
-  if (!isNetworkEnabled(reference._firestore)) {
-    // オフライン時は ID をクライアント側で生成し、set としてキューする
-    const documentId = generateAutoId();
-    const path = `${reference.path}/${documentId}`;
-    logDebug(`Network disabled, queueing add as set for ${path}`);
-    getWriteQueue(reference._firestore).enqueue("set", path, dbData as DocumentData);
-    return doc<T>(reference, documentId);
-  }
-  const body: AddDocumentRequest = {
-    collectionPath: reference.path,
-    data: dbData as DocumentData,
-  };
-  const res = await transport.post<AddDocumentResponse>("/docs", body);
-  return doc<T>(reference, res.documentId);
+
+  // 本家同様、ID はクライアント側で生成して set として書き込む
+  // （レイテンシ補償でローカルビューに即時反映できるようにするため）
+  const documentId = generateAutoId();
+  const path = `${reference.path}/${documentId}`;
+  await getLocalStore(reference._firestore).enqueue([
+    { type: "set", path, data: dbData as DocumentData },
+  ]);
+  return doc<T>(reference, documentId);
 }
 
 /** ドキュメントを部分更新する */
@@ -134,7 +126,6 @@ export async function updateDoc<T = DocumentData>(
   dataOrField: UpdateData<T> | string | FieldPath,
   ...moreFieldsAndValues: unknown[]
 ): Promise<void> {
-  const transport = reference._firestore._transport;
   let raw: Record<string, unknown>;
 
   if (typeof dataOrField === "string" || dataOrField instanceof FieldPath) {
@@ -162,21 +153,12 @@ export async function updateDoc<T = DocumentData>(
 
   const data = serializeData(raw as DocumentData, serializeOptionsOf(reference._firestore));
 
-  if (!isNetworkEnabled(reference._firestore)) {
-    logDebug(`Network disabled, queueing update for ${reference.path}`);
-    getWriteQueue(reference._firestore).enqueue("update", reference.path, data);
-    return;
-  }
-  await transport.patch(`/docs/${reference.path}`, { data });
+  return getLocalStore(reference._firestore).enqueue([
+    { type: "update", path: reference.path, data },
+  ]);
 }
 
 /** ドキュメントを削除する */
 export async function deleteDoc<T = DocumentData>(reference: DocumentReference<T>): Promise<void> {
-  if (!isNetworkEnabled(reference._firestore)) {
-    logDebug(`Network disabled, queueing delete for ${reference.path}`);
-    getWriteQueue(reference._firestore).enqueue("delete", reference.path);
-    return;
-  }
-  const transport = reference._firestore._transport;
-  await transport.delete(`/docs/${reference.path}`);
+  return getLocalStore(reference._firestore).enqueue([{ type: "delete", path: reference.path }]);
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getConnectionManager } from "./connection.js";
-import { addDoc, deleteDoc, setDoc, updateDoc } from "./crud.js";
+import { addDoc, deleteDoc, setDoc } from "./crud.js";
 import {
   connectFirestoreEmulator,
   disableNetwork,
@@ -8,7 +8,8 @@ import {
   getFirestore,
   waitForPendingWrites,
 } from "./firestore.js";
-import { getWriteQueue, isNetworkEnabled } from "./network-state.js";
+import { getLocalStore } from "./local-store.js";
+import { isNetworkEnabled } from "./network-state.js";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 
 /** connect() が実接続を張らないようにするための Mock WebSocket */
@@ -80,51 +81,73 @@ afterEach(() => {
 });
 
 describe("disableNetwork() / enableNetwork()", () => {
-  it("disableNetwork 中の書き込みは WriteQueue にエンキューされる", async () => {
+  it("disableNetwork 中の書き込みは MutationQueue に保持されローカルビューへ即時反映される", async () => {
     const transport = createMockTransport();
     const firestore = createMockFirestore(transport);
     await disableNetwork(firestore);
 
     expect(isNetworkEnabled(firestore)).toBe(false);
 
-    await setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
-    await updateDoc(createMockDocRef(firestore, "users/bob"), { age: 30 });
-    await deleteDoc(createMockDocRef(firestore, "users/carol"));
+    // オフライン中の書き込み Promise はサーバー確定まで pending（本家同様、await しない）
+    const p1 = setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
+    const p2 = deleteDoc(createMockDocRef(firestore, "users/carol"));
 
     expect(transport.put).not.toHaveBeenCalled();
-    expect(transport.patch).not.toHaveBeenCalled();
     expect(transport.delete).not.toHaveBeenCalled();
 
-    const queue = getWriteQueue(firestore);
-    expect(queue.size).toBe(3);
-    expect(queue.pendingWrites.map((w) => w.type)).toEqual(["set", "update", "delete"]);
-  });
+    const store = getLocalStore(firestore);
+    expect(store.pendingMutationCount).toBe(2);
 
-  it("disableNetwork 中の addDoc はクライアント生成 ID の参照を返しキューに積む", async () => {
-    const transport = createMockTransport();
-    const firestore = createMockFirestore(transport);
-    await disableNetwork(firestore);
-
-    const ref = await addDoc(createMockCollRef(firestore, "users"), { name: "Dave" });
-
-    expect(transport.post).not.toHaveBeenCalled();
-    expect(ref.id).toHaveLength(20);
-    expect(ref.path).toBe(`users/${ref.id}`);
-
-    const queue = getWriteQueue(firestore);
-    expect(queue.size).toBe(1);
-    expect(queue.pendingWrites[0]).toMatchObject({ type: "set", path: ref.path });
-  });
-
-  it("enableNetwork でキュー済みの書き込みがフラッシュされる", async () => {
-    const transport = createMockTransport();
-    const firestore = createMockFirestore(transport);
-    await disableNetwork(firestore);
-
-    await setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
-    await deleteDoc(createMockDocRef(firestore, "users/bob"));
+    // ローカルビューには即時反映されている（レイテンシ補償）
+    expect(store.composeDocument("users/alice")).toMatchObject({
+      exists: true,
+      data: { name: "Alice" },
+      hasPendingWrites: true,
+      fromCache: true,
+    });
+    expect(store.composeDocument("users/carol")).toMatchObject({ exists: false });
 
     await enableNetwork(firestore);
+    await Promise.all([p1, p2]);
+  });
+
+  it("disableNetwork 中の addDoc はクライアント生成 ID でキューに積まれる", async () => {
+    const transport = createMockTransport();
+    const firestore = createMockFirestore(transport);
+    await disableNetwork(firestore);
+
+    let resolvedRef: { id: string; path: string } | undefined;
+    const pending = addDoc(createMockCollRef(firestore, "users"), { name: "Dave" }).then((ref) => {
+      resolvedRef = ref;
+      return ref;
+    });
+
+    await Promise.resolve();
+    expect(transport.post).not.toHaveBeenCalled();
+    expect(transport.put).not.toHaveBeenCalled();
+    expect(getLocalStore(firestore).pendingMutationCount).toBe(1);
+    expect(resolvedRef).toBeUndefined(); // サーバー確定まで pending
+
+    await enableNetwork(firestore);
+    const ref = await pending;
+    expect(ref.id).toHaveLength(20);
+    expect(ref.path).toBe(`users/${ref.id}`);
+    expect(transport.put).toHaveBeenCalledWith(`/docs/${ref.path}`, {
+      data: { name: "Dave" },
+      options: undefined,
+    });
+  });
+
+  it("enableNetwork でキュー済みの書き込みが順番にフラッシュされる", async () => {
+    const transport = createMockTransport();
+    const firestore = createMockFirestore(transport);
+    await disableNetwork(firestore);
+
+    const p1 = setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
+    const p2 = deleteDoc(createMockDocRef(firestore, "users/bob"));
+
+    await enableNetwork(firestore);
+    await Promise.all([p1, p2]);
 
     expect(isNetworkEnabled(firestore)).toBe(true);
     expect(transport.put).toHaveBeenCalledWith("/docs/users/alice", {
@@ -132,7 +155,7 @@ describe("disableNetwork() / enableNetwork()", () => {
       options: undefined,
     });
     expect(transport.delete).toHaveBeenCalledWith("/docs/users/bob");
-    expect(getWriteQueue(firestore).size).toBe(0);
+    expect(getLocalStore(firestore).pendingMutationCount).toBe(0);
   });
 
   it("enableNetwork 後の書き込みは直接サーバーに送信される", async () => {
@@ -144,7 +167,7 @@ describe("disableNetwork() / enableNetwork()", () => {
     await setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
 
     expect(transport.put).toHaveBeenCalledTimes(1);
-    expect(getWriteQueue(firestore).size).toBe(0);
+    expect(getLocalStore(firestore).pendingMutationCount).toBe(0);
   });
 });
 
@@ -155,11 +178,11 @@ describe("waitForPendingWrites()", () => {
     await expect(waitForPendingWrites(firestore)).resolves.toBeUndefined();
   });
 
-  it("キューがフラッシュされるまで待機する", async () => {
+  it("キュー済みの書き込みが確定するまで待機する", async () => {
     const transport = createMockTransport();
     const firestore = createMockFirestore(transport);
     await disableNetwork(firestore);
-    await setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
+    const write = setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
 
     let resolved = false;
     const pending = waitForPendingWrites(firestore).then(() => {
@@ -173,18 +196,23 @@ describe("waitForPendingWrites()", () => {
     await enableNetwork(firestore);
     await pending;
     expect(resolved).toBe(true);
+    await write;
   });
 
-  it("フラッシュが失敗したら reject する", async () => {
+  it("書き込みが失敗しても resolve し、失敗は書き込み側の Promise で通知される", async () => {
     const transport = createMockTransport();
     transport.put.mockRejectedValue(new Error("network error"));
     const firestore = createMockFirestore(transport);
     await disableNetwork(firestore);
-    await setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
+    const write = setDoc(createMockDocRef(firestore, "users/alice"), { name: "Alice" });
 
     const pending = waitForPendingWrites(firestore);
     await enableNetwork(firestore);
-    await expect(pending).rejects.toThrow("Failed to flush queued write");
+    await expect(pending).resolves.toBeUndefined();
+    await expect(write).rejects.toThrow("network error");
+
+    // 失敗した mutation はロールバックされている
+    expect(getLocalStore(firestore).pendingMutationCount).toBe(0);
   });
 });
 

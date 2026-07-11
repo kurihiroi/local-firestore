@@ -1,0 +1,244 @@
+import { describe, expect, it, vi } from "vitest";
+import { LocalStore } from "./local-store.js";
+import type { Firestore } from "./types.js";
+
+function createMockTransport() {
+  return {
+    get: vi.fn(),
+    post: vi.fn().mockResolvedValue({ success: true, writeResults: [] }),
+    put: vi.fn().mockResolvedValue({ success: true, updateTime: "2026-01-01T00:00:00.000001Z" }),
+    patch: vi.fn().mockResolvedValue({ success: true, updateTime: "2026-01-01T00:00:00.000001Z" }),
+    delete: vi.fn().mockResolvedValue({ success: true }),
+    getWebSocketUrl: vi.fn(),
+  };
+}
+
+function setup() {
+  const transport = createMockTransport();
+  const firestore = { type: "firestore", _transport: transport } as unknown as Firestore;
+  const store = new LocalStore(firestore);
+  return { transport, firestore, store };
+}
+
+describe("LocalStore", () => {
+  describe("composeDocument（ローカルビュー合成）", () => {
+    it("リモート未観測かつ mutation なしでは null（状態不明）を返す", () => {
+      const { store } = setup();
+      expect(store.composeDocument("users/unknown")).toBeNull();
+    });
+
+    it("set mutation はリモート未観測でも状態を確定させる（fromCache: true）", () => {
+      const { store } = setup();
+      void store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]).catch(() => {});
+      expect(store.composeDocument("users/a")).toMatchObject({
+        exists: true,
+        data: { v: 1 },
+        hasPendingWrites: true,
+        fromCache: true,
+      });
+    });
+
+    it("リモート確定値に mutation を batchId 順で重ねる", () => {
+      const { store } = setup();
+      store.applyRemoteDoc("users/a", true, { v: 1, keep: true }, "t1", "t1");
+      void store.enqueue([{ type: "update", path: "users/a", data: { v: 2 } }]).catch(() => {});
+      void store.enqueue([{ type: "update", path: "users/a", data: { v: 3 } }]).catch(() => {});
+      expect(store.composeDocument("users/a")).toMatchObject({
+        exists: true,
+        data: { v: 3, keep: true },
+        hasPendingWrites: true,
+        fromCache: false,
+      });
+    });
+
+    it("delete mutation で exists: false になる", () => {
+      const { store } = setup();
+      store.applyRemoteDoc("users/a", true, { v: 1 }, "t1", "t1");
+      void store.enqueue([{ type: "delete", path: "users/a" }]).catch(() => {});
+      expect(store.composeDocument("users/a")).toMatchObject({
+        exists: false,
+        data: null,
+        hasPendingWrites: true,
+      });
+    });
+
+    it("ベース不明の update は状態不明のまま（null）", () => {
+      const { store } = setup();
+      void store.enqueue([{ type: "update", path: "users/a", data: { v: 1 } }]).catch(() => {});
+      expect(store.composeDocument("users/a")).toBeNull();
+    });
+
+    it("serverTimestamp をローカル書き込み時刻で推定解決する", () => {
+      const { store } = setup();
+      void store
+        .enqueue([
+          {
+            type: "set",
+            path: "users/a",
+            data: { at: { __fieldValue: true, type: "serverTimestamp" } },
+          },
+        ])
+        .catch(() => {});
+      const composed = store.composeDocument("users/a");
+      const at = composed?.data?.at as { __type: string; value: { seconds: number } };
+      expect(at.__type).toBe("timestamp");
+      expect(Math.abs(at.value.seconds - Date.now() / 1000)).toBeLessThan(5);
+    });
+
+    it("increment をキャッシュ値ベースで推定解決する", () => {
+      const { store } = setup();
+      store.applyRemoteDoc("users/a", true, { count: 10 }, "t1", "t1");
+      void store
+        .enqueue([
+          {
+            type: "set",
+            path: "users/a",
+            data: { count: { __fieldValue: true, type: "increment", value: 5 } },
+            options: { merge: true },
+          },
+        ])
+        .catch(() => {});
+      expect(store.composeDocument("users/a")?.data).toEqual({ count: 15 });
+    });
+  });
+
+  describe("mutation のライフサイクル", () => {
+    it("観測中のパスは ack 後もサーバースナップショット観測まで overlay を保持する", async () => {
+      const { store } = setup();
+      store.addDocInterest("users/a");
+      store.applyRemoteDoc("users/a", false, null, null, null);
+
+      const write = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+      await write; // HTTP ack 済み
+
+      // まだサーバースナップショットを観測していないため overlay は残る
+      expect(store.pendingMutationCount).toBe(1);
+      expect(store.composeDocument("users/a")?.hasPendingWrites).toBe(true);
+
+      // ack の updateTime 以上のスナップショット観測で除去される
+      store.applyRemoteDoc("users/a", true, { v: 1 }, "t", "2026-01-01T00:00:00.000001Z");
+      expect(store.pendingMutationCount).toBe(0);
+      expect(store.composeDocument("users/a")?.hasPendingWrites).toBe(false);
+    });
+
+    it("古いスナップショット（ack 前の値）では overlay を除去しない", async () => {
+      const { store } = setup();
+      store.addDocInterest("users/a");
+      const write = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+      await write;
+
+      // ack より古い updateTime のスナップショット
+      store.applyRemoteDoc("users/a", true, { v: 0 }, "t", "2026-01-01T00:00:00.000000Z");
+      expect(store.pendingMutationCount).toBe(1);
+      // overlay が勝つためフリッカーしない
+      expect(store.composeDocument("users/a")?.data).toEqual({ v: 1 });
+    });
+
+    it("観測者のいないパスは ack 時点で即除去される", async () => {
+      const { store } = setup();
+      await store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+      expect(store.pendingMutationCount).toBe(0);
+    });
+
+    it("delete は exists: false のスナップショット観測で除去される", async () => {
+      const { store } = setup();
+      store.addDocInterest("users/a");
+      store.applyRemoteDoc("users/a", true, { v: 1 }, "t", "t");
+      await store.enqueue([{ type: "delete", path: "users/a" }]);
+      expect(store.pendingMutationCount).toBe(1);
+
+      store.applyRemoteDoc("users/a", false, null, null, null);
+      expect(store.pendingMutationCount).toBe(0);
+    });
+
+    it("HTTP 失敗時は mutation をロールバックして Promise を reject する", async () => {
+      const { store, transport } = setup();
+      transport.put.mockRejectedValue(new Error("boom"));
+      store.applyRemoteDoc("users/a", true, { v: 0 }, "t", "t");
+
+      const write = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+      await expect(write).rejects.toThrow("boom");
+
+      expect(store.pendingMutationCount).toBe(0);
+      // ロールバック後はリモート確定値に戻る
+      expect(store.composeDocument("users/a")?.data).toEqual({ v: 0 });
+    });
+
+    it("途中の mutation が失敗しても後続は独立して送信される", async () => {
+      const { store, transport } = setup();
+      transport.put.mockRejectedValueOnce(new Error("boom"));
+
+      const w1 = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+      const w2 = store.enqueue([{ type: "set", path: "users/b", data: { v: 2 } }]);
+
+      await expect(w1).rejects.toThrow("boom");
+      await expect(w2).resolves.toBeUndefined();
+      expect(transport.put).toHaveBeenCalledTimes(2);
+    });
+
+    it("ローカル適用が不正なミューテーションは登録前に同期エラーになる", () => {
+      const { store } = setup();
+      expect(() =>
+        store.enqueue([
+          {
+            type: "set",
+            path: "users/a",
+            data: { v: { __fieldValue: true, type: "deleteField" } },
+          },
+        ]),
+      ).toThrow(/deleteField/);
+      expect(store.pendingMutationCount).toBe(0);
+    });
+  });
+
+  describe("バッチ mutation", () => {
+    it("複数オペレーションを /batch でアトミックに送信する", async () => {
+      const { store, transport } = setup();
+      transport.post.mockResolvedValue({
+        success: true,
+        writeResults: [
+          { path: "users/a", updateTime: "t1" },
+          { path: "users/b", updateTime: "t1" },
+        ],
+      });
+
+      const write = store.enqueue(
+        [
+          { type: "set", path: "users/a", data: { v: 1 } },
+          { type: "set", path: "users/b", data: { v: 2 } },
+        ],
+        "batch",
+      );
+
+      // 両方のパスがローカルビューへ即時反映されている
+      expect(store.composeDocument("users/a")?.data).toEqual({ v: 1 });
+      expect(store.composeDocument("users/b")?.data).toEqual({ v: 2 });
+
+      await write;
+      expect(transport.post).toHaveBeenCalledWith("/batch", {
+        operations: [
+          { type: "set", path: "users/a", data: { v: 1 } },
+          { type: "set", path: "users/b", data: { v: 2 } },
+        ],
+      });
+    });
+  });
+
+  describe("変更通知", () => {
+    it("enqueue / applyRemoteDoc / ロールバックで変更パスが通知される", async () => {
+      const { store, transport } = setup();
+      const events: string[][] = [];
+      store.onChange((paths) => events.push([...paths].sort()));
+
+      store.applyRemoteDoc("users/a", true, { v: 0 }, "t", "t");
+      expect(events.at(-1)).toEqual(["users/a"]);
+
+      transport.put.mockRejectedValue(new Error("boom"));
+      const write = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+      expect(events.at(-1)).toEqual(["users/a"]); // ローカル反映の通知
+
+      await expect(write).rejects.toThrow();
+      expect(events.length).toBeGreaterThanOrEqual(3); // ロールバックの通知
+    });
+  });
+});

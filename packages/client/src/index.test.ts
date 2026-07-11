@@ -106,8 +106,4 @@ describe("index.ts exports", () => {
     expect(clientExports.SnapshotMetadata).toBeDefined();
     expect(clientExports.Timestamp).toBeDefined();
   });
-
-  it("WriteQueue関連のエクスポートが存在する", () => {
-    expect(clientExports.WriteQueue).toBeDefined();
-  });
 });

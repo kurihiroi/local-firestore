@@ -15,6 +15,9 @@ export class QueryDocumentSnapshot<T = DocumentData> {
   /** ドキュメントリファレンス */
   readonly ref: DocumentReference<T>;
 
+  /** スナップショットのメタデータ */
+  readonly metadata: SnapshotMetadata;
+
   constructor(
     readonly path: string,
     readonly id: string,
@@ -22,6 +25,7 @@ export class QueryDocumentSnapshot<T = DocumentData> {
     private readonly _createTime: string,
     private readonly _updateTime: string,
     firestore?: Firestore,
+    metadata?: SnapshotMetadata,
   ) {
     if (firestore) {
       const segments = path.split("/");
@@ -32,10 +36,8 @@ export class QueryDocumentSnapshot<T = DocumentData> {
       // 後方互換: firestore 未指定時はダミーの ref を生成
       this.ref = { type: "document", id, path } as DocumentReference<T>;
     }
+    this.metadata = metadata ?? new SnapshotMetadata(false, false);
   }
-
-  /** スナップショットのメタデータ */
-  readonly metadata: SnapshotMetadata = new SnapshotMetadata(false, false);
 
   exists(): boolean {
     return true;
@@ -68,15 +70,17 @@ export class QuerySnapshot<T = DocumentData> {
   readonly query: Query<T> | CollectionReference<T>;
 
   /** スナップショットのメタデータ */
-  readonly metadata: SnapshotMetadata = new SnapshotMetadata(false, false);
+  readonly metadata: SnapshotMetadata;
 
   constructor(
     readonly docs: QueryDocumentSnapshot<T>[],
     changes?: DocumentChange<T>[],
     query?: Query<T> | CollectionReference<T>,
+    metadata?: SnapshotMetadata,
   ) {
     this._changes = changes ?? [];
     this.query = query as Query<T> | CollectionReference<T>;
+    this.metadata = metadata ?? new SnapshotMetadata(false, false);
   }
 
   get size(): number {

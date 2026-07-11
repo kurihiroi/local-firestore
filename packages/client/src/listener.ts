@@ -7,6 +7,7 @@ import type {
   ServerMessage,
 } from "@local-firestore/shared";
 import { type ConnectionManager, getConnectionManager } from "./connection.js";
+import { type ComposedDocument, getLocalStore } from "./local-store.js";
 import type { Query } from "./query.js";
 import { validateConstraints } from "./query.js";
 import { deserializeData } from "./serialization.js";
@@ -19,7 +20,7 @@ import type {
   DocumentSnapshot,
   Firestore,
 } from "./types.js";
-import { DocumentSnapshot as DocumentSnapshotImpl } from "./types.js";
+import { DocumentSnapshot as DocumentSnapshotImpl, SnapshotMetadata } from "./types.js";
 
 /** Unsubscribe関数の型 */
 export type Unsubscribe = () => void;
@@ -42,6 +43,16 @@ interface DocCallback<T = DocumentData> {
   onError?: (error: FirestoreError) => void;
   ref: DocumentReference<T>;
   converter: FirestoreDataConverter<T> | null;
+  /** metadata のみの変更（hasPendingWrites / fromCache）でも発火するか */
+  includeMetadataChanges: boolean;
+  /** 最後に発火したスナップショットの状態（重複発火の抑制に使用） */
+  lastEmitted?: {
+    exists: boolean;
+    dataJson: string;
+    updateTime: string | null;
+    hasPendingWrites: boolean;
+    fromCache: boolean;
+  };
 }
 
 interface QueryCallback<T = DocumentData> {
@@ -87,10 +98,92 @@ function getSnapshotCache(firestore: Firestore): SnapshotCache {
   return cache;
 }
 
+/**
+ * LocalStore の変更イベントを doc リスナーへ配信する購読を（Firestore ごとに1回）設定する。
+ * 書き込み API のローカル反映・サーバースナップショットの反映の両方がここを通る。
+ */
+const localStoreSubscribed = new WeakSet<Firestore>();
+
+function ensureLocalStoreSubscription(firestore: Firestore): void {
+  if (localStoreSubscribed.has(firestore)) return;
+  localStoreSubscribed.add(firestore);
+
+  getLocalStore(firestore).onChange((changedPaths) => {
+    for (const cb of subscriptionCallbacks.values()) {
+      if (cb.kind !== "doc") continue;
+      const docCb = cb as DocCallback<unknown>;
+      if (docCb.ref._firestore !== firestore) continue;
+      if (!changedPaths.has(docCb.ref.path)) continue;
+      emitComposedDocSnapshot(docCb, firestore);
+    }
+  });
+}
+
+/**
+ * ローカルビュー（サーバー確定値 + pending mutation の overlay）から
+ * doc リスナーへスナップショットを発火する。
+ *
+ * - データが前回発火時と同じで metadata（hasPendingWrites / fromCache）のみ
+ *   変化した場合は、includeMetadataChanges: true のリスナーにのみ発火する
+ */
+function emitComposedDocSnapshot(docCb: DocCallback<unknown>, firestore: Firestore): void {
+  const composed: ComposedDocument | null = getLocalStore(firestore).composeDocument(
+    docCb.ref.path,
+  );
+  if (!composed) return; // ドキュメントの状態が不明（初回スナップショット前の update 等）
+
+  const dataJson = composed.exists ? JSON.stringify(composed.data) : "";
+  const last = docCb.lastEmitted;
+  // 本家同様、デフォルトのリスナーはデータ変更時のみ発火する
+  // （同一データの再書き込みは updateTime が変わっても発火しない）
+  const dataChanged = !last || last.exists !== composed.exists || last.dataJson !== dataJson;
+  const metadataChanged =
+    !last ||
+    last.hasPendingWrites !== composed.hasPendingWrites ||
+    last.fromCache !== composed.fromCache;
+
+  if (!dataChanged && (!metadataChanged || !docCb.includeMetadataChanges)) {
+    return;
+  }
+
+  docCb.lastEmitted = {
+    exists: composed.exists,
+    dataJson,
+    updateTime: composed.updateTime,
+    hasPendingWrites: composed.hasPendingWrites,
+    fromCache: composed.fromCache,
+  };
+
+  let data: DocumentData | null = composed.exists
+    ? deserializeData(composed.data as DocumentData, firestore)
+    : null;
+  if (data && docCb.converter) {
+    const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
+      docCb.ref.path,
+      docCb.ref.id,
+      data,
+      composed.createTime ?? "",
+      composed.updateTime ?? "",
+      docCb.ref._firestore,
+    );
+    data = docCb.converter.fromFirestore(rawSnapshot) as DocumentData;
+  }
+  const metadata = new SnapshotMetadata(composed.hasPendingWrites, composed.fromCache);
+  const snapshot = new DocumentSnapshotImpl(
+    docCb.ref,
+    data,
+    composed.createTime,
+    composed.updateTime,
+    metadata,
+  );
+  docCb.onNext(snapshot);
+}
+
 function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore): void {
   if (manager.hasMessageHandler) return;
 
   const cache = getSnapshotCache(firestore);
+  const localStore = getLocalStore(firestore);
 
   manager.setMessageHandler((msg: ServerMessage) => {
     const cb = subscriptionCallbacks.get(msg.subscriptionId);
@@ -99,27 +192,9 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
     switch (msg.type) {
       case "doc_snapshot": {
         if (cb.kind !== "doc") break;
-        const docCb = cb as DocCallback<unknown>;
-
-        // キャッシュに保存
-        cache.putDocument(msg.path, msg.exists, msg.data, msg.createTime, msg.updateTime);
-
-        let data: DocumentData | null = msg.exists
-          ? deserializeData(msg.data as DocumentData, firestore)
-          : null;
-        if (data && docCb.converter) {
-          const rawSnapshot = new QueryDocumentSnapshot<DocumentData>(
-            docCb.ref.path,
-            docCb.ref.id,
-            data,
-            msg.createTime ?? "",
-            msg.updateTime ?? "",
-            docCb.ref._firestore,
-          );
-          data = docCb.converter.fromFirestore(rawSnapshot) as DocumentData;
-        }
-        const snapshot = new DocumentSnapshotImpl(docCb.ref, data, msg.createTime, msg.updateTime);
-        docCb.onNext(snapshot);
+        // サーバー確定値として LocalStore へ反映する。リスナーへの発火は
+        // LocalStore の変更イベント経由（emitComposedDocSnapshot）で行われる
+        localStore.applyRemoteDoc(msg.path, msg.exists, msg.data, msg.createTime, msg.updateTime);
         break;
       }
       case "query_snapshot": {
@@ -127,6 +202,12 @@ function ensureMessageHandler(manager: ConnectionManager, firestore: Firestore):
         const queryCb = cb as QueryCallback<unknown>;
         const conv = queryCb.converter;
         const fs = queryCb.firestore;
+
+        // クエリ結果の各ドキュメントもサーバー確定値として LocalStore へ反映する
+        // （同一パスの doc リスナーの発火・acknowledged mutation の解決に使われる）
+        for (const d of msg.docs) {
+          localStore.applyRemoteDoc(d.path, true, d.data, d.createTime, d.updateTime);
+        }
 
         // クエリ結果をキャッシュ
         cache.putQuery(
@@ -222,21 +303,32 @@ export function onSnapshotDoc<T = DocumentData>(
   ref: DocumentReference<T>,
   onNext: (snapshot: DocumentSnapshot<T>) => void,
   onError?: (error: FirestoreError) => void,
+  options?: SnapshotListenOptions,
 ): Unsubscribe {
   const firestore = ref._firestore;
   const manager = getConnectionManager(firestore);
   ensureMessageHandler(manager, firestore);
+  ensureLocalStoreSubscription(firestore);
   manager.connect();
 
   const subscriptionId = generateSubscriptionId();
+  const localStore = getLocalStore(firestore);
 
-  subscriptionCallbacks.set(subscriptionId, {
+  const docCb: DocCallback<unknown> = {
     kind: "doc",
     onNext: onNext as (snapshot: DocumentSnapshot<unknown>) => void,
     onError,
     ref: ref as DocumentReference<unknown>,
     converter: ref._converter as FirestoreDataConverter<unknown> | null,
-  });
+    includeMetadataChanges: options?.includeMetadataChanges ?? false,
+  };
+  subscriptionCallbacks.set(subscriptionId, docCb);
+
+  // acknowledged mutation の除去判定（サーバー反映の観測）に購読中パスを登録する
+  localStore.addDocInterest(ref.path);
+
+  // 既にローカルビューがある場合（pending write / キャッシュ済み）は即時発火する
+  emitComposedDocSnapshot(docCb, firestore);
 
   // 認証トークンは送信のたびに取得する（再接続時にも最新のトークンが使われる）
   const buildMessage = async () =>
@@ -253,6 +345,7 @@ export function onSnapshotDoc<T = DocumentData>(
   return () => {
     subscriptionCallbacks.delete(subscriptionId);
     manager.removeSubscription(subscriptionId);
+    localStore.removeDocInterest(ref.path);
   };
 }
 
@@ -336,9 +429,9 @@ export type ListenSource = "default" | "cache";
 /**
  * リスナーオプション
  *
- * ローカルエミュレータでは metadata（hasPendingWrites / fromCache）が変化しないため
- * `includeMetadataChanges` は no-op。`source` も常にサーバー配信のため no-op。
- * 本家 SDK からの移行コードが型エラーなく動作するために受け付ける。
+ * `includeMetadataChanges: true` を指定すると、データが同じで metadata
+ * （hasPendingWrites / fromCache）のみ変化した場合にも発火する（本家互換）。
+ * `source` は常にサーバー配信のため no-op（型互換のために受け付ける）。
  */
 export interface SnapshotListenOptions {
   readonly includeMetadataChanges?: boolean;
@@ -406,19 +499,21 @@ export function onSnapshot<T = DocumentData>(
     | SnapshotObserver<QuerySnapshot<T>>,
   ...rest: unknown[]
 ): Unsubscribe {
-  // オプション形式の処理（ローカルでは no-op のため読み飛ばすだけ）
+  // オプション形式の処理
   let onNextOrObserver:
     | ((snapshot: DocumentSnapshot<T>) => void)
     | ((snapshot: QuerySnapshot<T>) => void)
     | SnapshotObserver<DocumentSnapshot<T>>
     | SnapshotObserver<QuerySnapshot<T>>;
   let onError: ((error: FirestoreError) => void) | undefined;
+  let listenOptions: SnapshotListenOptions | undefined;
 
   if (
     typeof optionsOrOnNextOrObserver !== "function" &&
     isSnapshotListenOptions(optionsOrOnNextOrObserver) &&
     rest[0] !== undefined
   ) {
+    listenOptions = optionsOrOnNextOrObserver;
     onNextOrObserver = rest[0] as typeof onNextOrObserver;
     onError = rest[1] as ((error: FirestoreError) => void) | undefined;
   } else {
@@ -449,6 +544,7 @@ export function onSnapshot<T = DocumentData>(
       target as DocumentReference<T>,
       resolvedOnNext as (snapshot: DocumentSnapshot<T>) => void,
       resolvedOnError,
+      listenOptions,
     );
   }
   return onSnapshotQuery(
