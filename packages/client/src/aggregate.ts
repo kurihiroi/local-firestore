@@ -4,6 +4,7 @@ import type {
   DocumentData,
   SerializedAggregateSpec,
 } from "@local-firestore/shared";
+import { queryEqual } from "./comparisons.js";
 import { type Query, query as toQuery } from "./query.js";
 import type { CollectionReference } from "./types.js";
 
@@ -68,6 +69,29 @@ export class AggregateQuerySnapshot<AggregateSpecType extends AggregateSpec, T =
   data(): AggregateSpecData<AggregateSpecType> {
     return this._data as AggregateSpecData<AggregateSpecType>;
   }
+}
+
+// ============================================================
+// 等値比較
+// ============================================================
+
+/** 2つの AggregateField が同じ集計を表すか比較する */
+export function aggregateFieldEqual(
+  left: AggregateField<unknown>,
+  right: AggregateField<unknown>,
+): boolean {
+  return left.aggregateType === right.aggregateType && left.fieldPath === right.fieldPath;
+}
+
+/** 2つの AggregateQuerySnapshot が同じクエリ・同じ結果か比較する */
+export function aggregateQuerySnapshotEqual<AggregateSpecType extends AggregateSpec, T>(
+  left: AggregateQuerySnapshot<AggregateSpecType, T>,
+  right: AggregateQuerySnapshot<AggregateSpecType, T>,
+): boolean {
+  return (
+    queryEqual(left.query, right.query) &&
+    JSON.stringify(left.data()) === JSON.stringify(right.data())
+  );
 }
 
 // ============================================================

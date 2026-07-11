@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { arrayContainsKey, computeFirestoreKey, encodeNumber, valueKey } from "./firestore-key.js";
+import {
+  arrayContainsKey,
+  computeFirestoreKey,
+  encodeNumber,
+  pathOrderKey,
+  valueKey,
+} from "./firestore-key.js";
 
 function ts(seconds: number, nanoseconds = 0) {
   return { __type: "timestamp", value: { seconds, nanoseconds } };
@@ -172,6 +178,33 @@ describe("firestore-key", () => {
     it("配列でないフィールドはマッチしない", () => {
       expect(arrayContainsKey('"abc"', valueKey("abc"))).toBe(false);
       expect(arrayContainsKey(null, valueKey(1))).toBe(false);
+    });
+  });
+
+  describe("pathOrderKey", () => {
+    it("セグメント単位の順序を保存する（完全リソース名順）", () => {
+      // 生のパス文字列比較では "-"（U+002D）< "/"（U+002F）のため
+      // "users/user-1/..." < "users/user/..." になってしまうが、
+      // 本家のセグメント順では "user" < "user-1"
+      const a = pathOrderKey("users/user/posts/x");
+      const b = pathOrderKey("users/user-1/posts/y");
+      expect("users/user/posts/x" > "users/user-1/posts/y").toBe(true); // 生比較は逆順
+      expect(a < b).toBe(true); // セグメント順は user < user-1
+
+      // 通常ケース（"/" より大きい文字のみ）は生比較と同じ順序
+      expect(pathOrderKey("items/a") < pathOrderKey("items/b")).toBe(true);
+      expect(pathOrderKey("items/a") < pathOrderKey("shelf/s1/items/x")).toBe(true);
+    });
+
+    it("プレフィックス関係のパスは短い方が先", () => {
+      expect(pathOrderKey("col/doc") < pathOrderKey("col/doc-2")).toBe(true);
+      expect(pathOrderKey("col/doc/sub/x") < pathOrderKey("col/doc-2/sub/x")).toBe(true);
+    });
+
+    it("reference 型の valueKey と同じセグメント順序を使う", () => {
+      const refA = valueKey({ __type: "reference", value: "users/user/posts/x" });
+      const refB = valueKey({ __type: "reference", value: "users/user-1/posts/y" });
+      expect(refA < refB).toBe(true);
     });
   });
 

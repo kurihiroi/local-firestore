@@ -319,6 +319,44 @@ describe("QueryService", () => {
       );
       expect(results).toHaveLength(2);
     });
+
+    it("結果は完全リソース名（セグメント単位）順に並ぶ", () => {
+      const results = queryService.executeQuery("posts", [], true);
+      expect(results.map((r) => r.path)).toEqual([
+        "groups/dev/posts/post3",
+        "users/alice/posts/post1",
+        "users/bob/posts/post2",
+      ]);
+    });
+
+    it("ID に '/' より小さい文字を含む親でも本家のセグメント順になる", () => {
+      // 生のパス文字列比較では "-"（U+002D）< "/"（U+002F）のため
+      // "users/user-1/posts/a" が "users/user/posts/b" より先になってしまう。
+      // 本家はセグメント単位の比較なので "user" < "user-1"
+      docService.setDocument("users/user/posts/b", { likes: 1 });
+      docService.setDocument("users/user-1/posts/a", { likes: 2 });
+
+      const results = queryService.executeQuery("posts", [], true);
+      expect(results.map((r) => r.path)).toEqual([
+        "groups/dev/posts/post3",
+        "users/alice/posts/post1",
+        "users/bob/posts/post2",
+        "users/user/posts/b",
+        "users/user-1/posts/a",
+      ]);
+    });
+
+    it("__name__ カーソル（フルパス）もセグメント順で比較される", () => {
+      docService.setDocument("users/user/posts/b", { likes: 1 });
+      docService.setDocument("users/user-1/posts/a", { likes: 2 });
+
+      const results = queryService.executeQuery(
+        "posts",
+        [{ type: "startAfter", values: ["users/user/posts/b"] }],
+        true,
+      );
+      expect(results.map((r) => r.path)).toEqual(["users/user-1/posts/a"]);
+    });
   });
 
   describe("ベクトル近傍検索 (findNearest)", () => {

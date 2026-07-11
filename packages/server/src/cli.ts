@@ -21,6 +21,7 @@ import { matchesCollectionPattern, TtlService } from "./services/ttl.js";
 import { DocumentRepository } from "./storage/repository.js";
 import { createDatabase } from "./storage/sqlite.js";
 import { createTlsServer, getTlsOptionsFromEnv } from "./tls.js";
+import { acquireProcessLock, ProcessLockError } from "./utils/process-lock.js";
 import { attachWebSocket } from "./websocket.js";
 
 async function createAuthProvider(logger: Logger): Promise<AuthProvider> {
@@ -151,6 +152,28 @@ async function main() {
     level: logLevel,
     output: logFormat === "json" ? new JsonLogOutput() : undefined,
   });
+
+  // 多重起動ガード: 同一 SQLite ファイルへの複数プロセス起動は
+  // リアルタイム通知・トランザクション整合性を壊すため起動を拒否する
+  // （1 プロセス = 1 SQLite ファイル。stale ロックは自動回収）
+  try {
+    const lock = acquireProcessLock(dbPath);
+    if (lock) {
+      const releaseAndExit = (code: number) => {
+        lock.release();
+        process.exit(code);
+      };
+      process.on("exit", () => lock.release());
+      process.on("SIGINT", () => releaseAndExit(130));
+      process.on("SIGTERM", () => releaseAndExit(143));
+    }
+  } catch (err) {
+    if (err instanceof ProcessLockError) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
 
   const db = createDatabase(dbPath);
   const repo = new DocumentRepository(db);
