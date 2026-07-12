@@ -2,6 +2,7 @@ import type {
   DocumentData,
   DocumentMetadata,
   FirestoreErrorCode,
+  MutationContext,
   SetOptions,
 } from "@local-firestore/shared";
 import {
@@ -22,18 +23,26 @@ import { parseDocumentPath } from "../utils/path.js";
  * クライアントのレイテンシ補償（ローカルビュー合成）と共有される。
  */
 export class DocumentService {
-  private mutationContext = createServerMutationContext();
-
   constructor(private repo: DocumentRepository) {}
 
   getDocument(path: string): DocumentMetadata | undefined {
     return this.repo.get(path);
   }
 
-  setDocument(path: string, data: DocumentData, options?: SetOptions): DocumentMetadata {
+  /**
+   * @param context serverTimestamp の解決コンテキスト。バッチ / トランザクションが
+   *                コミット単位の時刻統一のために共有コンテキストを渡す。
+   *                省略時は書き込みごとに新しい時刻で解決する。
+   */
+  setDocument(
+    path: string,
+    data: DocumentData,
+    options?: SetOptions,
+    context: MutationContext = createServerMutationContext(),
+  ): DocumentMetadata {
     const { collectionPath, documentId } = parseDocumentPath(path);
     const existing = this.repo.get(path);
-    const finalData = applySetMutation(existing?.data ?? null, data, options, this.mutationContext);
+    const finalData = applySetMutation(existing?.data ?? null, data, options, context);
 
     validateDocumentWrite(path, finalData);
     return this.repo.set({
@@ -47,7 +56,7 @@ export class DocumentService {
   addDocument(collectionPath: string, data: DocumentData): DocumentMetadata {
     const documentId = generateDocumentId();
     const path = `${collectionPath}/${documentId}`;
-    const finalData = applySetMutation(null, data, undefined, this.mutationContext);
+    const finalData = applySetMutation(null, data, undefined, createServerMutationContext());
 
     validateDocumentWrite(path, finalData);
     return this.repo.set({
@@ -58,13 +67,17 @@ export class DocumentService {
     });
   }
 
-  updateDocument(path: string, data: DocumentData): DocumentMetadata {
+  updateDocument(
+    path: string,
+    data: DocumentData,
+    context: MutationContext = createServerMutationContext(),
+  ): DocumentMetadata {
     const existing = this.repo.get(path);
     if (!existing) {
       throw new DocumentNotFoundError(path);
     }
 
-    const finalData = applyUpdateMutation(existing.data, data, this.mutationContext);
+    const finalData = applyUpdateMutation(existing.data, data, context);
 
     validateDocumentWrite(path, finalData);
     const { collectionPath, documentId } = parseDocumentPath(path);

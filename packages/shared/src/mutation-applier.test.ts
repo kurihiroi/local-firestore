@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { DocumentValidationError } from "./limits.js";
-import { applySetMutation, applyUpdateMutation, type MutationContext } from "./mutation-applier.js";
+import {
+  applySetMutation,
+  applyUpdateMutation,
+  createServerMutationContext,
+  type MutationContext,
+} from "./mutation-applier.js";
 
 const FIXED_TIME = {
   __type: "timestamp",
@@ -130,5 +135,38 @@ describe("applyUpdateMutation", () => {
     const base = { a: 1, nested: { x: 1 } };
     applyUpdateMutation(base, { "nested.x": 2, a: deleteSentinel }, ctx);
     expect(base).toEqual({ a: 1, nested: { x: 1 } });
+  });
+});
+
+describe("createServerMutationContext", () => {
+  it("同一コンテキスト内の serverTimestamp は常に同じ時刻に解決される", () => {
+    const context = createServerMutationContext();
+    const first = context.serverTimestamp();
+    const second = context.serverTimestamp();
+    expect(second.value).toEqual(first.value);
+    // 呼び出しごとに独立したオブジェクトを返す（共有ミューテーション防止）
+    expect(second.value).not.toBe(first.value);
+  });
+
+  it("commitTime を指定するとその時刻で解決される", () => {
+    const context = createServerMutationContext(new Date(1_700_000_000_500));
+    expect(context.serverTimestamp()).toEqual({
+      __type: "timestamp",
+      value: { seconds: 1_700_000_000, nanoseconds: 500_000_000 },
+    });
+  });
+
+  it("1 回の set 内の複数 serverTimestamp フィールドが一致する", () => {
+    const context = createServerMutationContext();
+    const result = applySetMutation(
+      null,
+      {
+        createdAt: { __fieldValue: true, type: "serverTimestamp" },
+        updatedAt: { __fieldValue: true, type: "serverTimestamp" },
+      },
+      undefined,
+      context,
+    );
+    expect(result.createdAt).toEqual(result.updatedAt);
   });
 });

@@ -4,6 +4,7 @@ import type {
   FirestoreErrorCode,
   WriteResult,
 } from "@local-firestore/shared";
+import { createServerMutationContext } from "@local-firestore/shared";
 import type Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import { DocumentRepository } from "../storage/repository.js";
@@ -83,16 +84,19 @@ export class TransactionService {
 
   /** 各オペレーションを適用し、書き込み結果（確定した create/updateTime）を返す */
   private applyOperations(operations: BatchOperation[]): WriteResult[] {
+    // コミット単位でコンテキストを共有し、全オペレーションの serverTimestamp を
+    // 単一のコミット時刻に統一する（本家と同じ挙動）
+    const context = createServerMutationContext();
     const results: WriteResult[] = [];
     for (const op of operations) {
       switch (op.type) {
         case "set": {
-          const meta = this.docService.setDocument(op.path, op.data ?? {}, op.options);
+          const meta = this.docService.setDocument(op.path, op.data ?? {}, op.options, context);
           results.push({ path: op.path, createTime: meta.createTime, updateTime: meta.updateTime });
           break;
         }
         case "update": {
-          const meta = this.docService.updateDocument(op.path, op.data ?? {});
+          const meta = this.docService.updateDocument(op.path, op.data ?? {}, context);
           results.push({ path: op.path, createTime: meta.createTime, updateTime: meta.updateTime });
           break;
         }
