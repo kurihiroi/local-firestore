@@ -187,6 +187,19 @@ describe("DocumentSnapshot", () => {
   });
 });
 
+describe("FieldPath バッククォートエスケープ", () => {
+  it("単純形式でないフィールド名は toString() でバッククォートされる", () => {
+    expect(new FieldPath("with-dash").toString()).toBe("`with-dash`");
+    expect(new FieldPath("a.b").toString()).toBe("`a.b`");
+    expect(new FieldPath("nested", "with space").toString()).toBe("nested.`with space`");
+  });
+
+  it("単純形式のフィールド名は従来どおりドット結合される", () => {
+    expect(new FieldPath("a", "b").toString()).toBe("a.b");
+    expect(new FieldPath("__name__").toString()).toBe("__name__");
+  });
+});
+
 describe("SnapshotMetadata", () => {
   it("isEqualで等値比較できる", () => {
     const m1 = new SnapshotMetadata(false, false);

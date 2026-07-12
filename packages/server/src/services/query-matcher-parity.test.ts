@@ -39,6 +39,8 @@ const FIXTURE_DOCS: Array<{ path: string; data: Record<string, unknown> }> = [
   // "/" より小さい文字（"-"）を含む親 ID: 生パス比較とセグメント順が食い違うケース
   { path: "shelf/s/items/v", data: { n: 5, s: "vanilla" } },
   { path: "shelf/s-1/items/w", data: { n: 6, s: "wasabi" } },
+  // 特殊文字を含むフィールド名（バッククォートエスケープの対象）
+  { path: "items/i", data: { n: 7, s: "ichigo", "pri-ce": 100, "a.b": "literal" } },
 ];
 
 /** フィクスチャ: 代表的なクエリ制約の組合せ */
@@ -202,6 +204,14 @@ const FIXTURE_QUERIES: Array<{
           { type: "where", fieldPath: "flag", op: "==", value: true },
         ],
       },
+    ],
+  },
+  {
+    name: "バッククォートフィールドパス（ダッシュ / リテラルドット）",
+    collectionPath: "items",
+    constraints: [
+      { type: "where", fieldPath: "`pri-ce`", op: "==", value: 100 },
+      { type: "where", fieldPath: "`a.b`", op: "==", value: "literal" },
     ],
   },
   {

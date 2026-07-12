@@ -134,6 +134,49 @@ describe("QueryService", () => {
       });
     });
 
+    describe("フィールドパス（バッククォートエスケープ）", () => {
+      it("特殊文字を含むフィールド名でクエリできる", () => {
+        docService.setDocument("props/p1", {
+          "with-dash": 1,
+          "a.b": "literal",
+          a: { b: "nested" },
+        });
+        docService.setDocument("props/p2", { "with-dash": 2, a: { b: "nested2" } });
+
+        // ダッシュを含むフィールド名
+        const byDash = queryService.executeQuery("props", [
+          { type: "where", fieldPath: "`with-dash`", op: "==", value: 2 },
+        ]);
+        expect(byDash.map((r) => r.documentId)).toEqual(["p2"]);
+
+        // バッククォート付きはドットを含む「リテラルなフィールド名」を指す
+        const byLiteralDot = queryService.executeQuery("props", [
+          { type: "where", fieldPath: "`a.b`", op: "==", value: "literal" },
+        ]);
+        expect(byLiteralDot.map((r) => r.documentId)).toEqual(["p1"]);
+
+        // バッククォートなしの a.b は従来どおりネストアクセス
+        const byNested = queryService.executeQuery("props", [
+          { type: "where", fieldPath: "a.b", op: "==", value: "nested2" },
+        ]);
+        expect(byNested.map((r) => r.documentId)).toEqual(["p2"]);
+
+        // orderBy でも使える
+        const ordered = queryService.executeQuery("props", [
+          { type: "orderBy", fieldPath: "`with-dash`", direction: "desc" },
+        ]);
+        expect(ordered.map((r) => r.documentId)).toEqual(["p2", "p1"]);
+      });
+
+      it("空セグメントを含むフィールドパスは QueryValidationError になる", () => {
+        expect(() =>
+          queryService.executeQuery("users", [
+            { type: "where", fieldPath: "a..b", op: "==", value: 1 },
+          ]),
+        ).toThrow(QueryValidationError);
+      });
+    });
+
     it("!= フィルタ", () => {
       const results = queryService.executeQuery("users", [
         { type: "where", fieldPath: "status", op: "!=", value: "active" },

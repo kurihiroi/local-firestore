@@ -3,6 +3,7 @@ import type {
   FirestoreDataConverter,
   SerializedTimestamp,
 } from "@local-firestore/shared";
+import { formatFieldPath } from "@local-firestore/shared";
 import type { HttpTransport } from "./transport.js";
 
 /** Firestoreインスタンス */
@@ -217,9 +218,13 @@ export class FieldPath {
     return new FieldPath("__name__");
   }
 
-  /** ドット区切りのパス文字列を返す */
+  /**
+   * ドット区切りのパス文字列を返す。
+   * 単純形式（[_a-zA-Z][_a-zA-Z0-9]*）でないフィールド名は本家同様
+   * バッククォートでエスケープされる（例: `with-dash`、ドットを含む `a.b`）。
+   */
   toString(): string {
-    return this.segments.join(".");
+    return formatFieldPath(this.segments);
   }
 
   /** 他の FieldPath と等しいか比較する */

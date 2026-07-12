@@ -1,3 +1,4 @@
+import { parseFieldPath } from "./field-path.js";
 import { DocumentValidationError } from "./limits.js";
 import { isFieldValueSentinel } from "./protocol.js";
 import type { DocumentData, SerializedTimestamp, SetOptions } from "./types.js";
@@ -100,9 +101,9 @@ function deepEqual(a: unknown, b: unknown): boolean {
 /** ドット記法パスで既存データから値を取得する */
 function getFieldByPath(data: DocumentData | undefined, path: string): unknown {
   if (!data) return undefined;
-  if (!path.includes(".")) return data[path];
+  if (!path.includes(".") && !path.includes("`")) return data[path];
   let current: unknown = data;
-  for (const segment of path.split(".")) {
+  for (const segment of parseFieldPath(path)) {
     if (!isPlainObject(current)) return undefined;
     current = current[segment];
   }
@@ -113,7 +114,7 @@ function getFieldByPath(data: DocumentData | undefined, path: string): unknown {
  * ドット記法パスでリーフ値のみを設定/削除する（本家 updateDoc のフィールドパス更新と同じ挙動）
  */
 function setFieldByPath(data: DocumentData, path: string, value: unknown): void {
-  const segments = path.split(".");
+  const segments = parseFieldPath(path);
   let current: Record<string, unknown> = data;
   for (let i = 0; i < segments.length - 1; i++) {
     const seg = segments[i];

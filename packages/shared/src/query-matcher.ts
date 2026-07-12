@@ -1,3 +1,4 @@
+import { parseFieldPath } from "./field-path.js";
 import { nextTypeTag, pathOrderKey, TYPE_TAG, valueKey, valueTypeTag } from "./firestore-key.js";
 import type {
   DocumentData,
@@ -43,7 +44,7 @@ function documentIdOf(path: string): string {
  */
 function getFieldValue(data: DocumentData, fieldPath: string): unknown {
   let current: unknown = data;
-  for (const segment of fieldPath.split(".")) {
+  for (const segment of parseFieldPath(fieldPath)) {
     if (typeof current !== "object" || current === null || Array.isArray(current)) {
       return undefined;
     }
