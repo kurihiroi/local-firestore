@@ -19,19 +19,24 @@ export interface MutationContext {
   serverTimestamp: () => SerializedTimestamp;
 }
 
-/** 現在時刻で serverTimestamp を解決するデフォルトコンテキストを作る */
-export function createServerMutationContext(): MutationContext {
-  return {
-    serverTimestamp: () => {
-      const now = new Date();
-      return {
-        __type: "timestamp",
-        value: {
-          seconds: Math.floor(now.getTime() / 1000),
-          nanoseconds: (now.getTime() % 1000) * 1_000_000,
-        },
-      };
+/**
+ * serverTimestamp を単一のコミット時刻で解決するコンテキストを作る。
+ *
+ * 時刻はコンテキスト生成時に 1 回だけ採取され、同一コンテキスト内の
+ * すべての serverTimestamp が同じ値に解決される（本家は 1 コミットの
+ * 全 serverTimestamp を単一のコミット時刻に統一する）。
+ * バッチ / トランザクションではコミット単位で 1 つのコンテキストを共有すること。
+ */
+export function createServerMutationContext(commitTime: Date = new Date()): MutationContext {
+  const resolved: SerializedTimestamp = {
+    __type: "timestamp",
+    value: {
+      seconds: Math.floor(commitTime.getTime() / 1000),
+      nanoseconds: (commitTime.getTime() % 1000) * 1_000_000,
     },
+  };
+  return {
+    serverTimestamp: () => ({ __type: "timestamp", value: { ...resolved.value } }),
   };
 }
 

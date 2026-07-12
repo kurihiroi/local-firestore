@@ -44,6 +44,21 @@ describe("TransactionService", () => {
       expect(docService.getDocument("users/alice")!.data).toEqual({ name: "Alice", age: 31 });
     });
 
+    it("コミット内の全 serverTimestamp が単一時刻に統一される", () => {
+      const serverTimestamp = { __fieldValue: true, type: "serverTimestamp" };
+      txnService.executeBatch([
+        { type: "set", path: "users/alice", data: { createdAt: serverTimestamp } },
+        { type: "set", path: "users/bob", data: { createdAt: serverTimestamp } },
+        { type: "set", path: "users/carol", data: { createdAt: serverTimestamp } },
+      ]);
+
+      const alice = docService.getDocument("users/alice")!.data.createdAt;
+      const bob = docService.getDocument("users/bob")!.data.createdAt;
+      const carol = docService.getDocument("users/carol")!.data.createdAt;
+      expect(bob).toEqual(alice);
+      expect(carol).toEqual(alice);
+    });
+
     it("options なしの set は全上書きする", () => {
       docService.setDocument("users/alice", { name: "Alice", age: 30 });
 
