@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WriteBatch, writeBatch } from "./batch.js";
 import { getFirestore } from "./firestore.js";
 import { doc } from "./references.js";
 import { FirestoreError } from "./transport.js";
+import type { Firestore } from "./types.js";
 
 describe("writeBatch", () => {
   const db = getFirestore();
@@ -34,5 +35,34 @@ describe("writeBatch", () => {
     } catch (e) {
       expect((e as FirestoreError).code).toBe("invalid-argument");
     }
+  });
+
+  it("set の merge オプションと update の可変長形式が commit で送信される", async () => {
+    const transport = {
+      get: vi.fn(),
+      post: vi.fn().mockResolvedValue({ success: true, writeResults: [] }),
+      put: vi.fn(),
+      patch: vi.fn(),
+      delete: vi.fn(),
+      getWebSocketUrl: vi.fn(),
+    };
+    const mockDb = { type: "firestore", _transport: transport } as unknown as Firestore;
+
+    const batch = writeBatch(mockDb);
+    batch.set(doc(mockDb, "users/alice"), { age: 31 }, { merge: true });
+    batch.update(doc(mockDb, "users/bob"), "age", 25, "profile.city", "Tokyo");
+    await batch.commit();
+
+    expect(transport.post).toHaveBeenCalledWith("/batch", {
+      operations: [
+        { type: "set", path: "users/alice", data: { age: 31 }, options: { merge: true } },
+        {
+          type: "update",
+          path: "users/bob",
+          data: { age: 25, "profile.city": "Tokyo" },
+          options: undefined,
+        },
+      ],
+    });
   });
 });

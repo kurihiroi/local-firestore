@@ -87,7 +87,7 @@ export class TransactionService {
     for (const op of operations) {
       switch (op.type) {
         case "set": {
-          const meta = this.docService.setDocument(op.path, op.data ?? {});
+          const meta = this.docService.setDocument(op.path, op.data ?? {}, op.options);
           results.push({ path: op.path, createTime: meta.createTime, updateTime: meta.updateTime });
           break;
         }

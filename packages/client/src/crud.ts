@@ -210,31 +210,7 @@ export async function updateDoc<T = DocumentData>(
   dataOrField: UpdateData<T> | string | FieldPath,
   ...moreFieldsAndValues: unknown[]
 ): Promise<void> {
-  let raw: Record<string, unknown>;
-
-  if (typeof dataOrField === "string" || dataOrField instanceof FieldPath) {
-    // フィールドパス形式: updateDoc(ref, field, value, field2, value2, ...)
-    const fieldPath = typeof dataOrField === "string" ? dataOrField : dataOrField.toString();
-    if (moreFieldsAndValues.length === 0) {
-      throw new Error("updateDoc with field path requires a value argument");
-    }
-    // ドット記法キーはそのまま送信し、サーバー側でリーフのみ更新する
-    // （ネスト展開すると親マップ全体の置換になり本家と挙動が変わるため）
-    const obj: Record<string, unknown> = {};
-    obj[fieldPath] = moreFieldsAndValues[0];
-
-    // 残りのペアを処理
-    for (let i = 1; i < moreFieldsAndValues.length; i += 2) {
-      const key = moreFieldsAndValues[i];
-      const val = moreFieldsAndValues[i + 1];
-      const keyStr = key instanceof FieldPath ? key.toString() : String(key);
-      obj[keyStr] = val;
-    }
-    raw = obj;
-  } else {
-    raw = dataOrField as Record<string, unknown>;
-  }
-
+  const raw = buildUpdateData(dataOrField as Record<string, unknown>, moreFieldsAndValues);
   const data = serializeData(raw as DocumentData, serializeOptionsOf(reference._firestore));
 
   return getLocalStore(reference._firestore).enqueue([
@@ -245,4 +221,40 @@ export async function updateDoc<T = DocumentData>(
 /** ドキュメントを削除する */
 export async function deleteDoc<T = DocumentData>(reference: DocumentReference<T>): Promise<void> {
   return getLocalStore(reference._firestore).enqueue([{ type: "delete", path: reference.path }]);
+}
+
+/**
+ * update 系 API（updateDoc / Transaction.update / WriteBatch.update）共通の
+ * 引数正規化。data 形式はそのまま返し、フィールドパス可変長形式
+ * `(field, value, field2, value2, ...)` は data オブジェクトへ変換する。
+ *
+ * ドット記法キーはそのまま送信し、サーバー側でリーフのみ更新する
+ * （ネスト展開すると親マップ全体の置換になり本家と挙動が変わるため）。
+ *
+ * @internal
+ */
+export function buildUpdateData(
+  dataOrField: Record<string, unknown> | string | FieldPath,
+  moreFieldsAndValues: unknown[],
+): Record<string, unknown> {
+  if (typeof dataOrField !== "string" && !(dataOrField instanceof FieldPath)) {
+    return dataOrField;
+  }
+
+  // フィールドパス形式: (field, value, field2, value2, ...)
+  const fieldPath = typeof dataOrField === "string" ? dataOrField : dataOrField.toString();
+  if (moreFieldsAndValues.length === 0) {
+    throw new Error("update with field path requires a value argument");
+  }
+  const obj: Record<string, unknown> = {};
+  obj[fieldPath] = moreFieldsAndValues[0];
+
+  // 残りのペアを処理
+  for (let i = 1; i < moreFieldsAndValues.length; i += 2) {
+    const key = moreFieldsAndValues[i];
+    const val = moreFieldsAndValues[i + 1];
+    const keyStr = key instanceof FieldPath ? key.toString() : String(key);
+    obj[keyStr] = val;
+  }
+  return obj;
 }

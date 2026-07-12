@@ -133,6 +133,8 @@ export interface BatchOperation {
   type: BatchOperationType;
   path: string;
   data?: DocumentData;
+  /** set のマージオプション（merge / mergeFields）。set 以外では未使用 */
+  options?: SetOptions;
 }
 
 /** POST /batch リクエスト */

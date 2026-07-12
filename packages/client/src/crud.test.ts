@@ -330,7 +330,7 @@ describe("updateDoc()", () => {
       field: string,
     ) => Promise<void>;
     await expect(updateDocImpl(ref, "field")).rejects.toThrow(
-      "updateDoc with field path requires a value argument",
+      "update with field path requires a value argument",
     );
   });
 });

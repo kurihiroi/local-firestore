@@ -61,6 +61,59 @@ describe("Transaction", () => {
     ]);
   });
 
+  it("set操作をmergeオプション付きで記録する", () => {
+    const transport = createMockTransport();
+    const firestore = createMockFirestore(transport);
+    const tx = new Transaction(firestore, "tx-1");
+    const ref = createMockDocRef(firestore, "users/alice");
+
+    tx.set(ref, { age: 31 }, { merge: true });
+    tx.set(ref, { name: "Alice", age: 32 }, { mergeFields: ["age"] });
+
+    expect(tx._getOperations()).toEqual([
+      { type: "set", path: "users/alice", data: { age: 31 }, options: { merge: true } },
+      {
+        type: "set",
+        path: "users/alice",
+        data: { name: "Alice", age: 32 },
+        options: { mergeFields: ["age"] },
+      },
+    ]);
+  });
+
+  it("update操作をフィールドパス可変長形式で記録する", () => {
+    const transport = createMockTransport();
+    const firestore = createMockFirestore(transport);
+    const tx = new Transaction(firestore, "tx-1");
+    const ref = createMockDocRef(firestore, "users/alice");
+
+    tx.update(ref, "age", 31, "profile.city", "Tokyo");
+
+    expect(tx._getOperations()).toEqual([
+      { type: "update", path: "users/alice", data: { age: 31, "profile.city": "Tokyo" } },
+    ]);
+  });
+
+  it("書き込み後のget()はエラーになる（read-after-write、本家互換）", async () => {
+    const transport = createMockTransport();
+    const firestore = createMockFirestore(transport);
+    const tx = new Transaction(firestore, "tx-1");
+    const ref = createMockDocRef(firestore, "users/alice");
+
+    tx.set(ref, { name: "Alice" });
+
+    try {
+      await tx.get(ref);
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(FirestoreError);
+      expect((e as FirestoreError).code).toBe("invalid-argument");
+      expect((e as FirestoreError).message).toContain("all reads to be executed before all writes");
+    }
+    // サーバーへの読み取りリクエストは送られない
+    expect(transport.post).not.toHaveBeenCalled();
+  });
+
   it("delete操作を記録する", () => {
     const transport = createMockTransport();
     const firestore = createMockFirestore(transport);

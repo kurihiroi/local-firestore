@@ -1,14 +1,17 @@
 import type {
   BatchOperation,
   DocumentData,
+  PartialWithFieldValue,
+  SetOptions,
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
 import { MAX_WRITE_OPERATIONS } from "@local-firestore/shared";
+import { buildUpdateData } from "./crud.js";
 import { getLocalStore } from "./local-store.js";
 import { serializeData } from "./serialization.js";
 import { FirestoreError } from "./transport.js";
-import type { DocumentReference, Firestore } from "./types.js";
+import type { DocumentReference, FieldPath, Firestore } from "./types.js";
 
 /** WriteBatchオブジェクトを作成する */
 export function writeBatch(firestore: Firestore): WriteBatch {
@@ -37,27 +40,54 @@ export class WriteBatch {
     }
   }
 
-  set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this {
+  set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this;
+  set<T = DocumentData>(
+    ref: DocumentReference<T>,
+    data: PartialWithFieldValue<T>,
+    options: SetOptions,
+  ): this;
+  set<T = DocumentData>(
+    ref: DocumentReference<T>,
+    data: WithFieldValue<T> | PartialWithFieldValue<T>,
+    options?: SetOptions,
+  ): this {
     this.ensureNotCommitted();
     this.ensureCapacity();
-    const dbData = ref._converter ? ref._converter.toFirestore(data) : data;
+    const dbData = ref._converter
+      ? options
+        ? ref._converter.toFirestore(data as PartialWithFieldValue<T>, options)
+        : ref._converter.toFirestore(data as WithFieldValue<T>)
+      : data;
     this.operations.push({
       type: "set",
       path: ref.path,
       data: serializeData(dbData as DocumentData, {
         ignoreUndefinedProperties: this.firestore._ignoreUndefinedProperties ?? false,
       }),
+      ...(options ? { options } : {}),
     });
     return this;
   }
 
-  update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this {
+  update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this;
+  update<T = DocumentData>(
+    ref: DocumentReference<T>,
+    field: string | FieldPath,
+    value: unknown,
+    ...moreFieldsAndValues: unknown[]
+  ): this;
+  update<T = DocumentData>(
+    ref: DocumentReference<T>,
+    dataOrField: UpdateData<T> | string | FieldPath,
+    ...moreFieldsAndValues: unknown[]
+  ): this {
     this.ensureNotCommitted();
     this.ensureCapacity();
+    const raw = buildUpdateData(dataOrField as Record<string, unknown>, moreFieldsAndValues);
     this.operations.push({
       type: "update",
       path: ref.path,
-      data: serializeData(data as DocumentData, {
+      data: serializeData(raw as DocumentData, {
         ignoreUndefinedProperties: this.firestore._ignoreUndefinedProperties ?? false,
       }),
     });
@@ -83,6 +113,7 @@ export class WriteBatch {
         type: op.type,
         path: op.path,
         data: op.data,
+        options: op.options,
       })),
       "batch",
     );
