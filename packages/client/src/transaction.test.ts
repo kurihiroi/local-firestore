@@ -148,10 +148,16 @@ describe("runTransaction()", () => {
     expect(result).toBe("done");
     expect(transport.post).toHaveBeenCalledTimes(2);
     expect(transport.post).toHaveBeenNthCalledWith(1, "/transaction/begin", {});
-    expect(transport.post).toHaveBeenNthCalledWith(2, "/transaction/commit", {
-      transactionId: "tx-1",
-      operations: [{ type: "set", path: "users/alice", data: { name: "Alice" } }],
-    });
+    expect(transport.post).toHaveBeenNthCalledWith(
+      2,
+      "/transaction/commit",
+      {
+        transactionId: "tx-1",
+        operations: [{ type: "set", path: "users/alice", data: { name: "Alice" } }],
+      },
+      // commit の再送は二重適用になりうるためトランスポート層リトライを無効化する
+      { retry: false },
+    );
   });
 
   it("ABORTEDエラー時にリトライする", async () => {

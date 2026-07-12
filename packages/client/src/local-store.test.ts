@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { LocalStore } from "./local-store.js";
+import { FirestoreError } from "./transport.js";
 import type { Firestore } from "./types.js";
 
 function createMockTransport() {
@@ -221,6 +222,120 @@ describe("LocalStore", () => {
           { type: "set", path: "users/b", data: { v: 2 } },
         ],
       });
+    });
+  });
+
+  describe("一過性エラーの再送", () => {
+    it("unavailable エラーでは mutation をキューに保持しバックオフ後に再送する", async () => {
+      vi.useFakeTimers();
+      try {
+        const { store, transport } = setup();
+        transport.put.mockRejectedValueOnce(new FirestoreError("unavailable", "server down"));
+        store.applyRemoteDoc("users/a", true, { v: 0 }, "t", "t");
+
+        const write = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+        let settled = false;
+        void write.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+
+        await vi.advanceTimersByTimeAsync(0); // 初回送信の失敗を処理
+        // ロールバックされず、ローカルビューも書き込み後の値を維持する
+        expect(store.pendingMutationCount).toBe(1);
+        expect(store.composeDocument("users/a")?.data).toEqual({ v: 1 });
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1000); // バックオフ後の再送
+        await expect(write).resolves.toBeUndefined();
+        expect(transport.put).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("一過性エラー中は後続 mutation の送信も止めて順序を保つ", async () => {
+      vi.useFakeTimers();
+      try {
+        const { store, transport } = setup();
+        transport.put.mockRejectedValueOnce(new FirestoreError("unavailable", "server down"));
+
+        const w1 = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+        const w2 = store.enqueue([{ type: "set", path: "users/b", data: { v: 2 } }]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(transport.put).toHaveBeenCalledTimes(1); // users/b はまだ送らない
+
+        await vi.advanceTimersByTimeAsync(1000);
+        await expect(w1).resolves.toBeUndefined();
+        await expect(w2).resolves.toBeUndefined();
+        expect(transport.put).toHaveBeenCalledTimes(3);
+        // 再送は users/a → users/b の順
+        expect(transport.put.mock.calls[1][0]).toBe("/docs/users/a");
+        expect(transport.put.mock.calls[2][0]).toBe("/docs/users/b");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("連続失敗で再送間隔が指数的に伸びる", async () => {
+      vi.useFakeTimers();
+      try {
+        const { store, transport } = setup();
+        transport.put
+          .mockRejectedValueOnce(new FirestoreError("unavailable", "down"))
+          .mockRejectedValueOnce(new FirestoreError("deadline-exceeded", "slow"));
+
+        const write = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+
+        await vi.advanceTimersByTimeAsync(0); // 失敗 1 回目
+        await vi.advanceTimersByTimeAsync(1000); // 1 秒後に再送 → 失敗 2 回目
+        expect(transport.put).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(1000); // まだ 2 秒経っていないので再送されない
+        expect(transport.put).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(1000); // 2 秒後に再送 → 成功
+        await expect(write).resolves.toBeUndefined();
+        expect(transport.put).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("clear() は再送タイマーを破棄する", async () => {
+      vi.useFakeTimers();
+      try {
+        const { store, transport } = setup();
+        transport.put.mockRejectedValueOnce(new FirestoreError("unavailable", "server down"));
+
+        void store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(transport.put).toHaveBeenCalledTimes(1);
+
+        store.clear();
+        await vi.advanceTimersByTimeAsync(60000);
+        expect(transport.put).toHaveBeenCalledTimes(1); // 再送されない
+        expect(store.pendingMutationCount).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("恒久エラー（permission-denied 等）は従来どおりロールバックする", async () => {
+      const { store, transport } = setup();
+      transport.put.mockRejectedValue(new FirestoreError("permission-denied", "denied"));
+      store.applyRemoteDoc("users/a", true, { v: 0 }, "t", "t");
+
+      const write = store.enqueue([{ type: "set", path: "users/a", data: { v: 1 } }]);
+      await expect(write).rejects.toThrow("denied");
+
+      expect(store.pendingMutationCount).toBe(0);
+      expect(store.composeDocument("users/a")?.data).toEqual({ v: 0 });
     });
   });
 
