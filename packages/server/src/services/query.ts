@@ -54,73 +54,11 @@ export class QueryService {
       return this.executeFindNearest(collectionPath, constraints, findNearest, collectionGroup);
     }
 
-    const { conditions, params } = buildFilterConditions(
+    const { sql, params, isLimitToLast } = buildSelectQuery(
       collectionPath,
       constraints,
       collectionGroup,
     );
-
-    const orderBys = constraints.filter(
-      (c): c is SerializedOrderByConstraint => c.type === "orderBy",
-    );
-    const limits = constraints.filter(
-      (c): c is SerializedLimitConstraint => c.type === "limit" || c.type === "limitToLast",
-    );
-    const cursors = constraints.filter(
-      (c): c is SerializedCursorConstraint =>
-        c.type === "startAt" ||
-        c.type === "startAfter" ||
-        c.type === "endAt" ||
-        c.type === "endBefore",
-    );
-
-    // 本家同様、limitToLast には orderBy が必須
-    const isLimitToLast = limits.length > 0 && limits[limits.length - 1].type === "limitToLast";
-    if (isLimitToLast && orderBys.length === 0) {
-      throw new QueryValidationError(
-        "limitToLast() queries require specifying at least one orderBy() clause",
-      );
-    }
-
-    // 実効 orderBy を構築（明示 orderBy + 暗黙の __name__ タイブレーク）
-    const orderKeys = buildOrderKeys(orderBys, constraints);
-
-    // 明示 orderBy 対象フィールドが存在しないドキュメントは除外する（本家と同じ挙動）
-    for (const o of orderBys) {
-      if (o.fieldPath !== "__name__") {
-        conditions.push(`${fieldJsonExpr(o.fieldPath)} IS NOT NULL`);
-      }
-    }
-
-    // カーソル条件（実効 orderBy に対する辞書式タプル比較）
-    for (const cursor of cursors) {
-      const built = buildCursorClause(cursor, orderKeys, collectionPath);
-      if (built) {
-        conditions.push(built.sql);
-        params.push(...built.sqlParams);
-      }
-    }
-
-    // ORDER BY（limitToLast の場合は方向を反転して LIMIT 後に元へ戻す）
-    const orderByClause = ` ORDER BY ${orderKeys
-      .map((o) => {
-        const dir = isLimitToLast
-          ? o.direction === "asc"
-            ? "DESC"
-            : "ASC"
-          : o.direction.toUpperCase();
-        return `${o.expr} ${dir}`;
-      })
-      .join(", ")}`;
-
-    // LIMIT（複数指定された場合は最後の制約が有効 — 本家と同じ）
-    let limitClause = "";
-    if (limits.length > 0) {
-      limitClause = ` LIMIT ?`;
-      params.push(limits[limits.length - 1].limit);
-    }
-
-    const sql = `SELECT * FROM documents WHERE ${conditions.join(" AND ")}${orderByClause}${limitClause}`;
     const rows = this.db.prepare(sql).all(...params) as RawRow[];
 
     const results = rows.map(toMetadata);
@@ -197,12 +135,6 @@ export class QueryService {
     aggregateSpec: SerializedAggregateSpec,
     collectionGroup = false,
   ): AggregateResultData {
-    const { conditions, params } = buildFilterConditions(
-      collectionPath,
-      constraints,
-      collectionGroup,
-    );
-
     // 集計SELECT式を構築
     const selectParts: string[] = [];
     const aliases = Object.keys(aggregateSpec);
@@ -236,7 +168,10 @@ export class QueryService {
       }
     }
 
-    const sql = `SELECT ${selectParts.join(", ")} FROM documents WHERE ${conditions.join(" AND ")}`;
+    // 本家同様、集計は元クエリの orderBy / カーソル / limit を適用した
+    // 結果集合に対して行う（getCountFromServer(query(coll, limit(10))) は最大 10）
+    const { sql: baseSql, params } = buildSelectQuery(collectionPath, constraints, collectionGroup);
+    const sql = `SELECT ${selectParts.join(", ")} FROM (${baseSql})`;
     const row = this.db.prepare(sql).get(...params) as Record<string, number | null> | undefined;
 
     const result: AggregateResultData = {};
@@ -245,6 +180,89 @@ export class QueryService {
     }
     return result;
   }
+}
+
+/**
+ * フィルタ・orderBy・カーソル・limit を反映したドキュメント SELECT 文を構築する
+ * （executeQuery / executeAggregate 共通。findNearest は対象外）。
+ *
+ * limitToLast の場合は ORDER BY を反転して LIMIT を適用した SQL を返すため、
+ * 行を元の順序で使う場合は呼び出し側で反転が必要（isLimitToLast で通知）。
+ * 集計用途では順序は無関係のため反転不要。
+ */
+function buildSelectQuery(
+  collectionPath: string,
+  constraints: SerializedQueryConstraint[],
+  collectionGroup: boolean,
+): { sql: string; params: unknown[]; isLimitToLast: boolean } {
+  const { conditions, params } = buildFilterConditions(
+    collectionPath,
+    constraints,
+    collectionGroup,
+  );
+
+  const orderBys = constraints.filter(
+    (c): c is SerializedOrderByConstraint => c.type === "orderBy",
+  );
+  const limits = constraints.filter(
+    (c): c is SerializedLimitConstraint => c.type === "limit" || c.type === "limitToLast",
+  );
+  const cursors = constraints.filter(
+    (c): c is SerializedCursorConstraint =>
+      c.type === "startAt" ||
+      c.type === "startAfter" ||
+      c.type === "endAt" ||
+      c.type === "endBefore",
+  );
+
+  // 本家同様、limitToLast には orderBy が必須
+  const isLimitToLast = limits.length > 0 && limits[limits.length - 1].type === "limitToLast";
+  if (isLimitToLast && orderBys.length === 0) {
+    throw new QueryValidationError(
+      "limitToLast() queries require specifying at least one orderBy() clause",
+    );
+  }
+
+  // 実効 orderBy を構築（明示 orderBy + 暗黙の __name__ タイブレーク）
+  const orderKeys = buildOrderKeys(orderBys, constraints);
+
+  // 明示 orderBy 対象フィールドが存在しないドキュメントは除外する（本家と同じ挙動）
+  for (const o of orderBys) {
+    if (o.fieldPath !== "__name__") {
+      conditions.push(`${fieldJsonExpr(o.fieldPath)} IS NOT NULL`);
+    }
+  }
+
+  // カーソル条件（実効 orderBy に対する辞書式タプル比較）
+  for (const cursor of cursors) {
+    const built = buildCursorClause(cursor, orderKeys, collectionPath);
+    if (built) {
+      conditions.push(built.sql);
+      params.push(...built.sqlParams);
+    }
+  }
+
+  // ORDER BY（limitToLast の場合は方向を反転して LIMIT 後に元へ戻す）
+  const orderByClause = ` ORDER BY ${orderKeys
+    .map((o) => {
+      const dir = isLimitToLast
+        ? o.direction === "asc"
+          ? "DESC"
+          : "ASC"
+        : o.direction.toUpperCase();
+      return `${o.expr} ${dir}`;
+    })
+    .join(", ")}`;
+
+  // LIMIT（複数指定された場合は最後の制約が有効 — 本家と同じ）
+  let limitClause = "";
+  if (limits.length > 0) {
+    limitClause = ` LIMIT ?`;
+    params.push(limits[limits.length - 1].limit);
+  }
+
+  const sql = `SELECT * FROM documents WHERE ${conditions.join(" AND ")}${orderByClause}${limitClause}`;
+  return { sql, params, isLimitToLast };
 }
 
 /** フィールド値を JSON テキストとして取り出す式（欠損時は SQL NULL） */
