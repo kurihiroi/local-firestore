@@ -8,7 +8,7 @@ import type {
   Firestore,
   SnapshotOptions,
 } from "./types.js";
-import { FieldPath, SnapshotMetadata, Timestamp } from "./types.js";
+import { FieldPath, resolvePendingTimestamps, SnapshotMetadata, Timestamp } from "./types.js";
 
 /** クエリ結果のドキュメントスナップショット（必ず存在する） */
 export class QueryDocumentSnapshot<T = DocumentData> {
@@ -43,14 +43,19 @@ export class QueryDocumentSnapshot<T = DocumentData> {
     return true;
   }
 
-  data(_options?: SnapshotOptions): T {
-    return this._data;
+  data(options?: SnapshotOptions): T {
+    // 保留中 serverTimestamp はローカル書き込み中にしか存在しないため、
+    // それ以外は走査コストを省く
+    if (!this.metadata.hasPendingWrites) return this._data;
+    return resolvePendingTimestamps(this._data, options?.serverTimestamps ?? "none") as T;
   }
 
   /** フィールドパスで指定したフィールドの値を取得する */
-  get(fieldPath: string | FieldPath): unknown {
+  get(fieldPath: string | FieldPath, options?: SnapshotOptions): unknown {
     const fp = typeof fieldPath === "string" ? new FieldPath(...fieldPath.split(".")) : fieldPath;
-    return fp.resolveValue(this._data as Record<string, unknown>);
+    const value = fp.resolveValue(this._data as Record<string, unknown>);
+    if (!this.metadata.hasPendingWrites) return value;
+    return resolvePendingTimestamps(value, options?.serverTimestamps ?? "none");
   }
 
   get createTime(): Timestamp {

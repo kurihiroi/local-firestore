@@ -14,7 +14,8 @@ import {
 import { logDebug } from "./logger.js";
 import { isNetworkEnabled } from "./network-state.js";
 import { FirestoreError, isTransientError } from "./transport.js";
-import type { Firestore } from "./types.js";
+import type { Firestore, PendingServerTimestampWire } from "./types.js";
+import { isPendingServerTimestampWire } from "./types.js";
 
 /**
  * レイテンシ補償のローカルストア
@@ -283,9 +284,15 @@ export class LocalStore {
 
   private contextFor(mutation: PendingMutation): MutationContext {
     return {
-      serverTimestamp: () => ({
-        __type: "timestamp",
-        value: { ...mutation.localWriteTime.value },
+      // serverTimestamp は保留中マーカーに解決し、スナップショットの
+      // data(options) で serverTimestamps オプションに応じた値へ最終解決する
+      serverTimestamp: (previousValue?: unknown): PendingServerTimestampWire => ({
+        __type: "pendingServerTimestamp",
+        estimate: { __type: "timestamp", value: { ...mutation.localWriteTime.value } },
+        // 直前も保留中 serverTimestamp なら、その「確定済みの前回値」を引き継ぐ
+        previous: isPendingServerTimestampWire(previousValue)
+          ? previousValue.previous
+          : (previousValue ?? null),
       }),
     };
   }

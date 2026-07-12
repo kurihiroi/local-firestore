@@ -14,7 +14,7 @@ import { GeoPoint } from "./geo-point.js";
 import { doc } from "./references.js";
 import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
-import { Timestamp } from "./types.js";
+import { isPendingServerTimestampWire, PendingServerTimestamp, Timestamp } from "./types.js";
 import { VectorValue } from "./vector.js";
 
 /**
@@ -166,6 +166,15 @@ export function serializeData(data: DocumentData, options?: SerializeOptions): D
 /** ワイヤ形式の値をクラスインスタンスへ復元する */
 export function deserializeValue(value: unknown, firestore: Firestore): unknown {
   if (value === null || value === undefined) return value;
+
+  // 保留中 serverTimestamp マーカー（LocalStore のローカルビュー由来）
+  if (isPendingServerTimestampWire(value)) {
+    const est = value.estimate.value;
+    return new PendingServerTimestamp(
+      new Timestamp(est.seconds, est.nanoseconds),
+      deserializeValue(value.previous, firestore),
+    );
+  }
 
   if (isSerializedWrapper(value)) {
     switch (value.__type) {

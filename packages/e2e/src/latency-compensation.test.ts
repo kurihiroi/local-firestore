@@ -112,25 +112,29 @@ describe("E2E: レイテンシ補償（D-1）", () => {
     }
   });
 
-  it("serverTimestamp がローカル推定値で即時反映され、確定後にサーバー時刻へ置き換わる", async () => {
+  it("保留中 serverTimestamp はデフォルトで null、'estimate' で推定値になり、確定後にサーバー時刻へ置き換わる", async () => {
     const db = getFirestore({ host: "localhost", port: ctx.port });
     try {
       const ref = doc(collection(db, "lc"), "d3");
-      const timestamps: Array<{ at: unknown; pending: boolean }> = [];
+      const timestamps: Array<{ at: unknown; estimated: unknown; pending: boolean }> = [];
       const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, (snap) => {
         timestamps.push({
           at: snap.data()?.at,
+          estimated: snap.data({ serverTimestamps: "estimate" })?.at,
           pending: snap.metadata.hasPendingWrites,
         });
       });
 
       const write = setDoc(ref, { at: serverTimestamp() });
 
-      // ローカル推定値（クライアント時刻の Timestamp）が即時反映されている
+      // 本家互換: 保留中はデフォルト（'none'）で null、'estimate' でローカル推定値
       const localEvent = timestamps.at(-1);
       expect(localEvent?.pending).toBe(true);
-      expect(localEvent?.at).toBeInstanceOf(Timestamp);
-      expect(Math.abs((localEvent?.at as Timestamp).toMillis() - Date.now())).toBeLessThan(5000);
+      expect(localEvent?.at).toBeNull();
+      expect(localEvent?.estimated).toBeInstanceOf(Timestamp);
+      expect(Math.abs((localEvent?.estimated as Timestamp).toMillis() - Date.now())).toBeLessThan(
+        5000,
+      );
 
       await write;
       await waitFor(
