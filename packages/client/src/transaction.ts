@@ -2,17 +2,20 @@ import type {
   BatchOperation,
   DocumentData,
   GetDocumentResponse,
+  PartialWithFieldValue,
+  SetOptions,
   TransactionBeginResponse,
   TransactionCommitResponse,
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
 import { ERROR_CODES, MAX_WRITE_OPERATIONS } from "@local-firestore/shared";
+import { buildUpdateData } from "./crud.js";
 import { deserializeData, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
 import type { DocumentReference, Firestore } from "./types.js";
-import { DocumentSnapshot } from "./types.js";
+import { DocumentSnapshot, type FieldPath } from "./types.js";
 
 export interface TransactionOptions {
   maxAttempts?: number;
@@ -55,6 +58,8 @@ export async function runTransaction<T>(
 
       const isConflict = e instanceof FirestoreError && e.code === ERROR_CODES.ABORTED;
       if (isConflict && attempt < maxAttempts - 1) {
+        // 本家同様、競合リトライはランダム指数バックオフを挟む
+        await backoff(attempt);
         continue;
       }
       throw e;
@@ -62,6 +67,13 @@ export async function runTransaction<T>(
   }
 
   throw new Error("Transaction failed after maximum attempts");
+}
+
+/** 競合リトライのランダム指数バックオフ（100ms 起点、上限 2 秒、0.5〜1.0 倍で分散） */
+function backoff(attempt: number): Promise<void> {
+  const base = Math.min(100 * 2 ** attempt, 2000);
+  const delay = base * (0.5 + Math.random() * 0.5);
+  return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 export class Transaction {
@@ -73,6 +85,13 @@ export class Transaction {
   ) {}
 
   async get<T = DocumentData>(ref: DocumentReference<T>): Promise<DocumentSnapshot<T>> {
+    // 本家同様、書き込み後の読み取りはエラー（全読み取りは全書き込みより前に行う）
+    if (this.operations.length > 0) {
+      throw new FirestoreError(
+        "invalid-argument",
+        "Firestore transactions require all reads to be executed before all writes.",
+      );
+    }
     const transport = this.firestore._transport;
     const res = await transport.post<GetDocumentResponse>("/transaction/get", {
       transactionId: this.transactionId,
@@ -111,23 +130,50 @@ export class Transaction {
     return { ignoreUndefinedProperties: this.firestore._ignoreUndefinedProperties ?? false };
   }
 
-  set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this {
+  set<T = DocumentData>(ref: DocumentReference<T>, data: WithFieldValue<T>): this;
+  set<T = DocumentData>(
+    ref: DocumentReference<T>,
+    data: PartialWithFieldValue<T>,
+    options: SetOptions,
+  ): this;
+  set<T = DocumentData>(
+    ref: DocumentReference<T>,
+    data: WithFieldValue<T> | PartialWithFieldValue<T>,
+    options?: SetOptions,
+  ): this {
     this.ensureCapacity();
-    const dbData = ref._converter ? ref._converter.toFirestore(data) : data;
+    const dbData = ref._converter
+      ? options
+        ? ref._converter.toFirestore(data as PartialWithFieldValue<T>, options)
+        : ref._converter.toFirestore(data as WithFieldValue<T>)
+      : data;
     this.operations.push({
       type: "set",
       path: ref.path,
       data: serializeData(dbData as DocumentData, this.serializeOptions()),
+      ...(options ? { options } : {}),
     });
     return this;
   }
 
-  update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this {
+  update<T = DocumentData>(ref: DocumentReference<T>, data: UpdateData<T>): this;
+  update<T = DocumentData>(
+    ref: DocumentReference<T>,
+    field: string | FieldPath,
+    value: unknown,
+    ...moreFieldsAndValues: unknown[]
+  ): this;
+  update<T = DocumentData>(
+    ref: DocumentReference<T>,
+    dataOrField: UpdateData<T> | string | FieldPath,
+    ...moreFieldsAndValues: unknown[]
+  ): this {
     this.ensureCapacity();
+    const raw = buildUpdateData(dataOrField as Record<string, unknown>, moreFieldsAndValues);
     this.operations.push({
       type: "update",
       path: ref.path,
-      data: serializeData(data as DocumentData, this.serializeOptions()),
+      data: serializeData(raw as DocumentData, this.serializeOptions()),
     });
     return this;
   }

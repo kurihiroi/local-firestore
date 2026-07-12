@@ -28,6 +28,30 @@ describe("TransactionService", () => {
       expect(docService.getDocument("users/bob")!.data).toEqual({ name: "Bob" });
     });
 
+    it("set の options（merge）を適用する", () => {
+      docService.setDocument("users/alice", { name: "Alice", age: 30 });
+
+      txnService.executeBatch([
+        {
+          type: "set",
+          path: "users/alice",
+          data: { age: 31 },
+          options: { merge: true },
+        },
+      ]);
+
+      // merge なので既存フィールドが保持される
+      expect(docService.getDocument("users/alice")!.data).toEqual({ name: "Alice", age: 31 });
+    });
+
+    it("options なしの set は全上書きする", () => {
+      docService.setDocument("users/alice", { name: "Alice", age: 30 });
+
+      txnService.executeBatch([{ type: "set", path: "users/alice", data: { age: 31 } }]);
+
+      expect(docService.getDocument("users/alice")!.data).toEqual({ age: 31 });
+    });
+
     it("set / update / delete を混在できる", () => {
       docService.setDocument("users/alice", { name: "Alice", age: 30 });
 
