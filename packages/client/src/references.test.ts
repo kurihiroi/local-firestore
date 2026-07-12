@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getFirestore } from "./firestore.js";
 import { collection, doc } from "./references.js";
+import { FirestoreError } from "./transport.js";
 
 describe("doc()", () => {
   const db = getFirestore();
@@ -93,5 +94,45 @@ describe("firestore / converter 公開プロパティ (2-4)", () => {
 
     // 元のリファレンスは変更されない
     expect(ref.converter).toBeNull();
+  });
+});
+
+describe("ID / パスの内容バリデーション（本家準拠）", () => {
+  const db = getFirestore();
+
+  it("予約名（__.*__）の ID は invalid-argument", () => {
+    expect(() => doc(db, "users/__alice__")).toThrow(FirestoreError);
+    expect(() => collection(db, "__users__")).toThrow(FirestoreError);
+    try {
+      doc(db, "users", "__id__");
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect((e as FirestoreError).code).toBe("invalid-argument");
+    }
+  });
+
+  it('単体の "." / ".." の ID は invalid-argument', () => {
+    expect(() => doc(db, "users/.")).toThrow(FirestoreError);
+    expect(() => doc(db, "users/..")).toThrow(FirestoreError);
+    // ドットを含むだけの ID は許可される
+    expect(() => doc(db, "users/a.b")).not.toThrow();
+  });
+
+  it("空セグメントを含むパスは invalid-argument", () => {
+    expect(() => doc(db, "users//posts/p1")).toThrow(FirestoreError);
+    expect(() => collection(db, "users/alice/")).toThrow(FirestoreError);
+  });
+
+  it("1500 バイト超の ID は invalid-argument", () => {
+    expect(() => doc(db, "users", "a".repeat(1500))).not.toThrow();
+    expect(() => doc(db, "users", "a".repeat(1501))).toThrow(FirestoreError);
+  });
+
+  it("CollectionReference 起点の doc() でも検証される", () => {
+    const users = collection(db, "users");
+    expect(() => doc(users, "__bad__")).toThrow(FirestoreError);
+    // セグメント数の偶奇も検証される（doc(collRef, "a/b") は 3 セグメントで不正）
+    expect(() => doc(users, "a/b")).toThrow(FirestoreError);
+    expect(() => doc(users, "a/b/c")).not.toThrow();
   });
 });

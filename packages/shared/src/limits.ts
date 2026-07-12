@@ -236,3 +236,54 @@ export function validateWriteOperationCount(count: number): void {
     );
   }
 }
+
+/** コレクション ID / ドキュメント ID の最大サイズ（1500 バイト、UTF-8） */
+export const MAX_ID_BYTES = 1500;
+
+/** ドキュメント名（パス）の最大サイズ（6 KiB、calculateDocumentNameSize 基準） */
+export const MAX_DOCUMENT_NAME_BYTES = 6144;
+
+/**
+ * パスの各セグメント（コレクション ID / ドキュメント ID）とパス全長を
+ * 本家仕様で検証する。
+ *
+ * - セグメントが空でない（`//` や末尾 `/` を含まない）
+ * - セグメントが単体の `.` / `..` でない
+ * - セグメントが予約名（`__.*__`）でない
+ * - セグメントが 1500 バイト（UTF-8）以下
+ * - ドキュメント名サイズが 6 KiB 以下
+ *
+ * 違反時は `DocumentValidationError`（code: invalid-argument）を投げる。
+ * セグメント数の偶奇（ドキュメント / コレクション判定）は呼び出し側で検証する。
+ */
+export function validatePathSegments(path: string): void {
+  for (const segment of path.split("/")) {
+    if (segment.length === 0) {
+      throw new DocumentValidationError(
+        `Invalid path: "${path}". Paths must not contain empty segments.`,
+      );
+    }
+    if (segment === "." || segment === "..") {
+      throw new DocumentValidationError(
+        `Invalid path segment: "${segment}". IDs cannot solely be "." or "..".`,
+      );
+    }
+    if (RESERVED_FIELD_NAME_PATTERN.test(segment)) {
+      throw new DocumentValidationError(
+        `Invalid path segment: "${segment}". IDs matching __.*__ are reserved.`,
+      );
+    }
+    if (utf8ByteLength(segment) > MAX_ID_BYTES) {
+      throw new DocumentValidationError(
+        `Invalid path segment: ID exceeds the maximum of ${MAX_ID_BYTES} bytes.`,
+      );
+    }
+  }
+
+  const nameSize = calculateDocumentNameSize(path);
+  if (nameSize > MAX_DOCUMENT_NAME_BYTES) {
+    throw new DocumentValidationError(
+      `Document name (${nameSize} bytes) exceeds the maximum of ${MAX_DOCUMENT_NAME_BYTES} bytes.`,
+    );
+  }
+}

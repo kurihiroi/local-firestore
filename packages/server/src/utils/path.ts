@@ -2,6 +2,10 @@
  * ドキュメントパスからコレクションパスとドキュメントIDを抽出する
  * 例: "users/alice" → { collectionPath: "users", documentId: "alice" }
  * 例: "users/alice/posts/post1" → { collectionPath: "users/alice/posts", documentId: "post1" }
+ *
+ * セグメント数の偶奇のみ検証する。セグメント内容の検証
+ * （空 / "." ".." / 予約名 / サイズ上限）は書き込み経路の
+ * DocumentService が validatePathSegments で行う。
  */
 export function parseDocumentPath(path: string): {
   collectionPath: string;

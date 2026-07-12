@@ -1,6 +1,19 @@
 import type { DocumentData, FirestoreDataConverter } from "@local-firestore/shared";
+import { validatePathSegments } from "@local-firestore/shared";
 import { FirestoreError } from "./transport.js";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
+
+/**
+ * パスセグメントの内容（空 / "." ".." / 予約名 __.*__ / 1500 バイト超 /
+ * パス全長 6 KiB 超）を本家仕様で検証する。違反時は invalid-argument。
+ */
+function validatePathContent(path: string): void {
+  try {
+    validatePathSegments(path);
+  } catch (e) {
+    throw new FirestoreError("invalid-argument", e instanceof Error ? e.message : String(e));
+  }
+}
 
 /**
  * ドキュメントリファレンスを取得する
@@ -25,6 +38,7 @@ export function doc<T = DocumentData>(
         `Invalid document path: "${fullPath}". Document paths must have an even number of segments.`,
       );
     }
+    validatePathContent(fullPath);
     const docId = segments[segments.length - 1];
     const collPath = segments.slice(0, -1).join("/");
 
@@ -35,6 +49,13 @@ export function doc<T = DocumentData>(
   // parent is CollectionReference
   const resolvedPath = `${parent.path}/${fullPath}`;
   const segments = resolvedPath.split("/");
+  if (segments.length % 2 !== 0) {
+    throw new FirestoreError(
+      "invalid-argument",
+      `Invalid document path: "${resolvedPath}". Document paths must have an even number of segments.`,
+    );
+  }
+  validatePathContent(resolvedPath);
   const docId = segments[segments.length - 1];
   return createDocumentReference(parent._firestore, resolvedPath, docId, parent);
 }
@@ -61,11 +82,19 @@ export function collection<T = DocumentData>(
         `Invalid collection path: "${fullPath}". Collection paths must have an odd number of segments.`,
       );
     }
+    validatePathContent(fullPath);
     return createCollectionReference<T>(parent, fullPath);
   }
 
   // parent is DocumentReference
   const resolvedPath = `${parent.path}/${fullPath}`;
+  if (resolvedPath.split("/").length % 2 !== 1) {
+    throw new FirestoreError(
+      "invalid-argument",
+      `Invalid collection path: "${resolvedPath}". Collection paths must have an odd number of segments.`,
+    );
+  }
+  validatePathContent(resolvedPath);
   return createCollectionReference<T>(parent._firestore, resolvedPath, parent);
 }
 

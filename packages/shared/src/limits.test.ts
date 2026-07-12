@@ -7,6 +7,7 @@ import {
   MAX_DOCUMENT_SIZE_BYTES,
   MAX_NESTING_DEPTH,
   validateDocumentWrite,
+  validatePathSegments,
   validateWriteOperationCount,
 } from "./limits.js";
 
@@ -140,5 +141,58 @@ describe("validateWriteOperationCount", () => {
 
   it("should reject more than 500 operations", () => {
     expect(() => validateWriteOperationCount(501)).toThrow(DocumentValidationError);
+  });
+});
+
+describe("validatePathSegments", () => {
+  it("正常なパスは通る", () => {
+    expect(() => validatePathSegments("users/alice")).not.toThrow();
+    expect(() => validatePathSegments("users/alice/posts/post1")).not.toThrow();
+    expect(() => validatePathSegments("users/日本語ID")).not.toThrow();
+  });
+
+  it("空セグメントを拒否する", () => {
+    expect(() => validatePathSegments("users//alice")).toThrow(DocumentValidationError);
+    expect(() => validatePathSegments("users/alice/")).toThrow(DocumentValidationError);
+    expect(() => validatePathSegments("/users/alice")).toThrow(DocumentValidationError);
+  });
+
+  it('単体の "." / ".." を拒否する', () => {
+    expect(() => validatePathSegments("users/.")).toThrow(DocumentValidationError);
+    expect(() => validatePathSegments("users/..")).toThrow(DocumentValidationError);
+    // ドットを含むだけの ID は許可される
+    expect(() => validatePathSegments("users/a.b")).not.toThrow();
+    expect(() => validatePathSegments("users/...")).not.toThrow();
+  });
+
+  it("予約名（__.*__）を拒否する", () => {
+    expect(() => validatePathSegments("users/__alice__")).toThrow(DocumentValidationError);
+    expect(() => validatePathSegments("__users__/alice")).toThrow(DocumentValidationError);
+    expect(() => validatePathSegments("users/____")).toThrow(DocumentValidationError);
+    // 片側だけのアンダースコアは許可される
+    expect(() => validatePathSegments("users/__alice")).not.toThrow();
+    expect(() => validatePathSegments("users/alice__")).not.toThrow();
+  });
+
+  it("1500 バイト超の ID を拒否する（UTF-8 バイト数基準）", () => {
+    expect(() => validatePathSegments(`users/${"a".repeat(1500)}`)).not.toThrow();
+    expect(() => validatePathSegments(`users/${"a".repeat(1501)}`)).toThrow(
+      DocumentValidationError,
+    );
+    // マルチバイト文字は文字数でなくバイト数で数える（あ = 3 バイト）
+    expect(() => validatePathSegments(`users/${"あ".repeat(500)}`)).not.toThrow();
+    expect(() => validatePathSegments(`users/${"あ".repeat(501)}`)).toThrow(
+      DocumentValidationError,
+    );
+  });
+
+  it("ドキュメント名 6 KiB 超のパスを拒否する", () => {
+    // 1500 バイト以下のセグメントを重ねて全長 6144 バイト超にする
+    const segment = "a".repeat(1400);
+    const parts = ["c1", segment, "c2", segment, "c3", segment, "c4", segment, "c5", segment];
+    expect(() => validatePathSegments(parts.join("/"))).toThrow(DocumentValidationError);
+
+    // 6 KiB 以下の深いパスは通る
+    expect(() => validatePathSegments(["c1", segment, "c2", segment].join("/"))).not.toThrow();
   });
 });
