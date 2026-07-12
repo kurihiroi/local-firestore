@@ -232,6 +232,42 @@ describe("DocumentService", () => {
     });
   });
 
+  describe("ID / パスの内容バリデーション（G-4）", () => {
+    it("予約名（__.*__）の ID / コレクション ID はエラーになる", () => {
+      expect(() => service.setDocument("users/__alice__", { a: 1 })).toThrow(
+        DocumentValidationError,
+      );
+      expect(() => service.setDocument("__users__/alice", { a: 1 })).toThrow(
+        DocumentValidationError,
+      );
+      expect(() => service.addDocument("__users__", { a: 1 })).toThrow(DocumentValidationError);
+    });
+
+    it('単体の "." / ".." の ID はエラーになる', () => {
+      expect(() => service.setDocument("users/.", { a: 1 })).toThrow(DocumentValidationError);
+      expect(() => service.setDocument("users/..", { a: 1 })).toThrow(DocumentValidationError);
+      expect(() => service.setDocument("users/a.b", { a: 1 })).not.toThrow();
+    });
+
+    it("1500 バイト超の ID はエラーになる", () => {
+      expect(() => service.setDocument(`users/${"a".repeat(1501)}`, { a: 1 })).toThrow(
+        DocumentValidationError,
+      );
+      expect(() => service.setDocument(`users/${"a".repeat(1500)}`, { a: 1 })).not.toThrow();
+    });
+
+    it("update も不正な ID を invalid-argument で拒否する（not-found より優先）", () => {
+      expect(() => service.updateDocument("users/__alice__", { a: 1 })).toThrow(
+        DocumentValidationError,
+      );
+    });
+
+    it("addDocument の自動 ID は本家互換の [A-Za-z0-9] 20 桁", () => {
+      const meta = service.addDocument("users", { a: 1 });
+      expect(meta.documentId).toMatch(/^[A-Za-z0-9]{20}$/);
+    });
+  });
+
   describe("Timestamp のマイクロ秒切り捨て（C-2）", () => {
     it("書き込み時にナノ秒がマイクロ秒精度に切り捨てられる", () => {
       service.setDocument("events/e1", {

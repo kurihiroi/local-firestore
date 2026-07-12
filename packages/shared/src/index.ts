@@ -13,10 +13,13 @@ export {
   calculateDocumentSize,
   calculateValueSize,
   DocumentValidationError,
+  MAX_DOCUMENT_NAME_BYTES,
   MAX_DOCUMENT_SIZE_BYTES,
+  MAX_ID_BYTES,
   MAX_NESTING_DEPTH,
   MAX_WRITE_OPERATIONS,
   validateDocumentWrite,
+  validatePathSegments,
   validateWriteOperationCount,
 } from "./limits.js";
 export type { MutationContext } from "./mutation-applier.js";

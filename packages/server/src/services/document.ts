@@ -10,6 +10,7 @@ import {
   applyUpdateMutation,
   createServerMutationContext,
   validateDocumentWrite,
+  validatePathSegments,
 } from "@local-firestore/shared";
 import type { DocumentRepository } from "../storage/repository.js";
 import { generateDocumentId } from "../utils/id.js";
@@ -41,6 +42,7 @@ export class DocumentService {
     context: MutationContext = createServerMutationContext(),
   ): DocumentMetadata {
     const { collectionPath, documentId } = parseDocumentPath(path);
+    validatePathSegments(path);
     const existing = this.repo.get(path);
     const finalData = applySetMutation(existing?.data ?? null, data, options, context);
 
@@ -54,6 +56,7 @@ export class DocumentService {
   }
 
   addDocument(collectionPath: string, data: DocumentData): DocumentMetadata {
+    validatePathSegments(collectionPath);
     const documentId = generateDocumentId();
     const path = `${collectionPath}/${documentId}`;
     const finalData = applySetMutation(null, data, undefined, createServerMutationContext());
@@ -72,6 +75,7 @@ export class DocumentService {
     data: DocumentData,
     context: MutationContext = createServerMutationContext(),
   ): DocumentMetadata {
+    validatePathSegments(path);
     const existing = this.repo.get(path);
     if (!existing) {
       throw new DocumentNotFoundError(path);
