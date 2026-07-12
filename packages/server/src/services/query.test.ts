@@ -764,6 +764,79 @@ describe("QueryService - Firestore互換セマンティクス", () => {
       expect(result.count).toBe(5);
     });
 
+    it("集計は limit 適用後の結果集合に対して行われる", () => {
+      for (let i = 1; i <= 5; i++) {
+        docService.setDocument(`scores/s${i}`, { v: i * 10 });
+      }
+
+      const result = queryService.executeAggregate(
+        "scores",
+        [
+          { type: "orderBy", fieldPath: "v", direction: "asc" },
+          { type: "limit", limit: 3 },
+        ],
+        {
+          count: { aggregateType: "count" },
+          total: { aggregateType: "sum", fieldPath: "v" },
+          average: { aggregateType: "avg", fieldPath: "v" },
+        },
+      );
+      // 10, 20, 30 の 3 件のみが対象
+      expect(result.count).toBe(3);
+      expect(result.total).toBe(60);
+      expect(result.average).toBe(20);
+    });
+
+    it("集計はカーソル（startAfter）適用後の結果集合に対して行われる", () => {
+      for (let i = 1; i <= 5; i++) {
+        docService.setDocument(`scores/s${i}`, { v: i * 10 });
+      }
+
+      const result = queryService.executeAggregate(
+        "scores",
+        [
+          { type: "orderBy", fieldPath: "v", direction: "asc" },
+          { type: "startAfter", values: [20] },
+        ],
+        { count: { aggregateType: "count" } },
+      );
+      // 30, 40, 50 の 3 件
+      expect(result.count).toBe(3);
+    });
+
+    it("集計は limitToLast 適用後の結果集合に対して行われる", () => {
+      for (let i = 1; i <= 5; i++) {
+        docService.setDocument(`scores/s${i}`, { v: i * 10 });
+      }
+
+      const result = queryService.executeAggregate(
+        "scores",
+        [
+          { type: "orderBy", fieldPath: "v", direction: "asc" },
+          { type: "limitToLast", limit: 2 },
+        ],
+        {
+          count: { aggregateType: "count" },
+          total: { aggregateType: "sum", fieldPath: "v" },
+        },
+      );
+      // 末尾の 40, 50 の 2 件
+      expect(result.count).toBe(2);
+      expect(result.total).toBe(90);
+    });
+
+    it("集計は orderBy 対象フィールド欠損ドキュメントを除外する（本家と同じ）", () => {
+      docService.setDocument("scores/a", { v: 10 });
+      docService.setDocument("scores/b", { other: 1 }); // v 欠損
+
+      const result = queryService.executeAggregate(
+        "scores",
+        [{ type: "orderBy", fieldPath: "v", direction: "asc" }],
+        { count: { aggregateType: "count" } },
+      );
+      expect(result.count).toBe(1);
+    });
+
     it("数値が1つもない場合 sum は 0、avg は null", () => {
       docService.setDocument("scores/a", { v: "text" });
       const result = queryService.executeAggregate("scores", [], {
