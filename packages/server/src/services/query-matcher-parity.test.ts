@@ -209,6 +209,20 @@ const FIXTURE_QUERIES: Array<{
     collectionPath: "items",
     constraints: [{ type: "where", fieldPath: "__name__", op: "==", value: "b" }],
   },
+  {
+    name: "__name__ 範囲フィルタ（>= / <、相対ID正規化）",
+    collectionPath: "items",
+    constraints: [
+      { type: "where", fieldPath: "__name__", op: ">=", value: "b" },
+      { type: "where", fieldPath: "__name__", op: "<", value: "f" },
+    ],
+  },
+  {
+    name: "コレクショングループ + __name__ 範囲フィルタ（フルパス）",
+    collectionPath: "items",
+    collectionGroup: true,
+    constraints: [{ type: "where", fieldPath: "__name__", op: ">", value: "shelf/s1/items/x" }],
+  },
   { name: "コレクショングループ", collectionPath: "items", collectionGroup: true, constraints: [] },
   {
     name: "コレクショングループ + orderBy",

@@ -380,14 +380,14 @@ function buildFilterConditions(
 
   // whereフィルタ
   for (const w of wheres) {
-    const { sql, sqlParams } = buildWhereClause(w);
+    const { sql, sqlParams } = buildWhereClause(w, collectionPath);
     conditions.push(sql);
     params.push(...sqlParams);
   }
 
   // 複合フィルタ (and/or)
   for (const comp of composites) {
-    const { sql, sqlParams } = buildCompositeClause(comp);
+    const { sql, sqlParams } = buildCompositeClause(comp, collectionPath);
     conditions.push(sql);
     params.push(...sqlParams);
   }
@@ -401,7 +401,10 @@ function validateAlias(alias: string): void {
   }
 }
 
-function buildWhereClause(w: SerializedWhereConstraint): {
+function buildWhereClause(
+  w: SerializedWhereConstraint,
+  collectionPath: string,
+): {
   sql: string;
   sqlParams: unknown[];
 } {
@@ -422,6 +425,19 @@ function buildWhereClause(w: SerializedWhereConstraint): {
         const values = w.value as unknown[];
         const placeholders = values.map(() => "?").join(", ");
         return { sql: `${idExpr} NOT IN (${placeholders})`, sqlParams: values };
+      }
+      case "<":
+      case "<=":
+      case ">":
+      case ">=": {
+        // 範囲比較はドキュメントパスの順序キーで行う（orderBy __name__ と同じ基準）。
+        // bare ID はこのコレクションのフルパスへ正規化する（本家と同じ扱い）
+        const raw = String(w.value);
+        const fullPath = raw.includes("/") ? raw : `${collectionPath}/${raw}`;
+        return {
+          sql: `firestore_path_key(path) ${w.op} ?`,
+          sqlParams: [pathOrderKey(fullPath)],
+        };
       }
       default:
         throw new QueryValidationError(`Unsupported operator for documentId(): ${w.op}`);
@@ -488,7 +504,10 @@ function buildWhereClause(w: SerializedWhereConstraint): {
   }
 }
 
-function buildCompositeClause(comp: SerializedCompositeFilterConstraint): {
+function buildCompositeClause(
+  comp: SerializedCompositeFilterConstraint,
+  collectionPath: string,
+): {
   sql: string;
   sqlParams: unknown[];
 } {
@@ -497,7 +516,7 @@ function buildCompositeClause(comp: SerializedCompositeFilterConstraint): {
   const params: unknown[] = [];
 
   for (const filter of comp.filters) {
-    const { sql, sqlParams } = buildWhereClause(filter);
+    const { sql, sqlParams } = buildWhereClause(filter, collectionPath);
     parts.push(sql);
     params.push(...sqlParams);
   }

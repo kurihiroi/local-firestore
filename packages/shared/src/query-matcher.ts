@@ -92,6 +92,28 @@ function matchesWhere(doc: MatchableDocument, w: SerializedWhereConstraint): boo
         return (w.value as unknown[]).includes(id);
       case "not-in":
         return !(w.value as unknown[]).includes(id);
+      case "<":
+      case "<=":
+      case ">":
+      case ">=": {
+        // 範囲比較はドキュメントパスの順序キーで行う（orderBy __name__ と同じ基準）。
+        // bare ID はドキュメントの親コレクションのフルパスへ正規化する
+        const raw = String(w.value);
+        const fullPath = raw.includes("/") ? raw : `${parentCollectionPath(doc.path)}/${raw}`;
+        const docKey = pathOrderKey(doc.path);
+        const target = pathOrderKey(fullPath);
+        switch (w.op) {
+          case "<":
+            return docKey < target;
+          case "<=":
+            return docKey <= target;
+          case ">":
+            return docKey > target;
+          case ">=":
+            return docKey >= target;
+        }
+        return false;
+      }
       default:
         throw new Error(`Unsupported operator for documentId(): ${w.op}`);
     }

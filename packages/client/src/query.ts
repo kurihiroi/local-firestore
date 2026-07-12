@@ -302,6 +302,19 @@ export function or(...constraints: QueryConstraint[]): QueryConstraint {
 // ベクトル近傍検索（FindNearest）
 // ============================================================
 
+/** findNearest の limit 上限（本家仕様） */
+const MAX_FIND_NEAREST_LIMIT = 1000;
+
+/** クエリベクトルの最大次元数（本家仕様） */
+const MAX_VECTOR_DIMENSIONS = 2048;
+
+/** 有効な距離測定方法 */
+const VALID_DISTANCE_MEASURES: readonly VectorDistanceMeasure[] = [
+  "EUCLIDEAN",
+  "COSINE",
+  "DOT_PRODUCT",
+];
+
 /** findNearest のオプション */
 export interface FindNearestOptions {
   /** ベクトルが格納されているフィールド */
@@ -336,11 +349,30 @@ export function findNearest<T = DocumentData>(
   if (queryVector.length === 0) {
     throw new FirestoreError("invalid-argument", "queryVector must not be empty");
   }
+  if (queryVector.length > MAX_VECTOR_DIMENSIONS) {
+    throw new FirestoreError(
+      "invalid-argument",
+      `queryVector dimension (${queryVector.length}) exceeds the maximum of ${MAX_VECTOR_DIMENSIONS}`,
+    );
+  }
   if (!queryVector.every((v) => typeof v === "number" && Number.isFinite(v))) {
     throw new FirestoreError("invalid-argument", "queryVector must contain only finite numbers");
   }
   if (!Number.isInteger(options.limit) || options.limit <= 0) {
     throw new FirestoreError("invalid-argument", "limit must be a positive integer");
+  }
+  if (options.limit > MAX_FIND_NEAREST_LIMIT) {
+    throw new FirestoreError(
+      "invalid-argument",
+      `limit (${options.limit}) exceeds the maximum of ${MAX_FIND_NEAREST_LIMIT} for findNearest queries`,
+    );
+  }
+  if (!VALID_DISTANCE_MEASURES.includes(options.distanceMeasure)) {
+    throw new FirestoreError(
+      "invalid-argument",
+      `Invalid distanceMeasure: "${options.distanceMeasure}". ` +
+        `Must be one of ${VALID_DISTANCE_MEASURES.join(", ")}.`,
+    );
   }
 
   const fieldStr =
