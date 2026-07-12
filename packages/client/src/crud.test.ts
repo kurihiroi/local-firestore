@@ -1,10 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { addDoc, deleteDoc, getDoc, getDocFromServer, setDoc, updateDoc } from "./crud.js";
+import {
+  addDoc,
+  deleteDoc,
+  getDoc,
+  getDocFromCache,
+  getDocFromServer,
+  setDoc,
+  updateDoc,
+} from "./crud.js";
 import { getLocalStore } from "./local-store.js";
 import { setNetworkEnabled } from "./network-state.js";
 import { FirestoreError } from "./transport.js";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
-import { DocumentSnapshot, FieldPath } from "./types.js";
+import { DocumentSnapshot, FieldPath, Timestamp } from "./types.js";
 
 function createMockTransport() {
   return {
@@ -178,6 +186,122 @@ describe("getDoc() オフラインフォールバック", () => {
     expect(transport.get).not.toHaveBeenCalled();
     expect(snapshot.data()).toEqual({ name: "Alice" });
     expect(snapshot.metadata.fromCache).toBe(true);
+  });
+});
+
+describe("SnapshotOptions.serverTimestamps（保留中 serverTimestamp の解決）", () => {
+  function setupPendingWrite() {
+    const transport = createMockTransport();
+    // ack させずに pending 状態を維持する
+    transport.put.mockReturnValue(new Promise(() => {}));
+    transport.patch.mockReturnValue(new Promise(() => {}));
+    const firestore = createMockFirestore(transport);
+    return { transport, firestore };
+  }
+
+  it("デフォルト（'none'）では保留中 serverTimestamp が null になる（本家互換）", async () => {
+    const { firestore } = setupPendingWrite();
+    const store = getLocalStore(firestore);
+    store.applyRemoteDoc(
+      "users/alice",
+      true,
+      { name: "Alice", at: { __type: "timestamp", value: { seconds: 100, nanoseconds: 0 } } },
+      "t",
+      "t",
+    );
+    void store
+      .enqueue([
+        {
+          type: "update",
+          path: "users/alice",
+          data: { at: { __fieldValue: true, type: "serverTimestamp" } },
+        },
+      ])
+      .catch(() => {});
+
+    const snap = await getDocFromCache(createMockDocRef(firestore, "users/alice"));
+    const data = snap.data() as Record<string, unknown>;
+    expect(data.at).toBeNull();
+    // 他のフィールドは影響を受けない
+    expect(data.name).toBe("Alice");
+  });
+
+  it("'estimate' はローカル書き込み時刻の推定値を返す", async () => {
+    const { firestore } = setupPendingWrite();
+    const store = getLocalStore(firestore);
+    void store
+      .enqueue([
+        {
+          type: "set",
+          path: "users/alice",
+          data: { at: { __fieldValue: true, type: "serverTimestamp" } },
+        },
+      ])
+      .catch(() => {});
+
+    const snap = await getDocFromCache(createMockDocRef(firestore, "users/alice"));
+    const at = (snap.data({ serverTimestamps: "estimate" }) as Record<string, unknown>).at;
+    expect(at).toBeInstanceOf(Timestamp);
+    expect(Math.abs((at as Timestamp).seconds - Date.now() / 1000)).toBeLessThan(5);
+  });
+
+  it("'previous' は直前の確定値を返す（存在しない場合は null）", async () => {
+    const { firestore } = setupPendingWrite();
+    const store = getLocalStore(firestore);
+    store.applyRemoteDoc(
+      "users/alice",
+      true,
+      { at: { __type: "timestamp", value: { seconds: 100, nanoseconds: 0 } } },
+      "t",
+      "t",
+    );
+    void store
+      .enqueue([
+        {
+          type: "update",
+          path: "users/alice",
+          data: { at: { __fieldValue: true, type: "serverTimestamp" } },
+        },
+      ])
+      .catch(() => {});
+
+    const snap = await getDocFromCache(createMockDocRef(firestore, "users/alice"));
+    const prev = (snap.data({ serverTimestamps: "previous" }) as Record<string, unknown>).at;
+    expect(prev).toBeInstanceOf(Timestamp);
+    expect((prev as Timestamp).seconds).toBe(100);
+
+    // 前回値のない新規ドキュメントでは null
+    void store
+      .enqueue([
+        {
+          type: "set",
+          path: "users/new",
+          data: { at: { __fieldValue: true, type: "serverTimestamp" } },
+        },
+      ])
+      .catch(() => {});
+    const snapNew = await getDocFromCache(createMockDocRef(firestore, "users/new"));
+    expect(
+      (snapNew.data({ serverTimestamps: "previous" }) as Record<string, unknown>).at,
+    ).toBeNull();
+  });
+
+  it("get(fieldPath) でも serverTimestamps オプションが効く", async () => {
+    const { firestore } = setupPendingWrite();
+    const store = getLocalStore(firestore);
+    void store
+      .enqueue([
+        {
+          type: "set",
+          path: "users/alice",
+          data: { at: { __fieldValue: true, type: "serverTimestamp" } },
+        },
+      ])
+      .catch(() => {});
+
+    const snap = await getDocFromCache(createMockDocRef(firestore, "users/alice"));
+    expect(snap.get("at")).toBeNull();
+    expect(snap.get("at", { serverTimestamps: "estimate" })).toBeInstanceOf(Timestamp);
   });
 });
 

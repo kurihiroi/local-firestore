@@ -62,6 +62,84 @@ export interface SnapshotOptions {
   readonly serverTimestamps?: "estimate" | "previous" | "none";
 }
 
+/** 保留中 serverTimestamp の解決方法 */
+export type ServerTimestampBehavior = NonNullable<SnapshotOptions["serverTimestamps"]>;
+
+/**
+ * @internal 保留中 serverTimestamp のワイヤ形式マーカー
+ *
+ * LocalStore がレイテンシ補償のローカルビュー合成時に serverTimestamp
+ * センチネルをこの形式に解決し、スナップショットの data(options) で
+ * SnapshotOptions.serverTimestamps に応じた値へ最終解決する。
+ * サーバーへ送信されることはない（送信データは元のセンチネルのまま）。
+ */
+export interface PendingServerTimestampWire {
+  __type: "pendingServerTimestamp";
+  /** ローカル書き込み時刻による推定値 */
+  estimate: SerializedTimestamp;
+  /** 直前の確定値（ワイヤ形式。存在しない場合は null） */
+  previous: unknown;
+}
+
+/** @internal 値が保留中 serverTimestamp マーカー（ワイヤ形式）かどうか */
+export function isPendingServerTimestampWire(value: unknown): value is PendingServerTimestampWire {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as Record<string, unknown>).__type === "pendingServerTimestamp"
+  );
+}
+
+/**
+ * @internal デシリアライズ後の保留中 serverTimestamp プレースホルダ
+ *
+ * DocumentSnapshot / QueryDocumentSnapshot の data(options) が
+ * serverTimestamps オプション（デフォルト 'none' = null）に従って解決する。
+ */
+export class PendingServerTimestamp {
+  constructor(
+    /** ローカル書き込み時刻による推定値 */
+    readonly estimate: Timestamp,
+    /** 直前の確定値（デシリアライズ済み。存在しない場合は null） */
+    readonly previous: unknown,
+  ) {}
+}
+
+/**
+ * @internal 保留中 serverTimestamp を SnapshotOptions に従って解決する
+ *
+ * 本家挙動: 'none'（デフォルト）は null、'estimate' はローカル推定値、
+ * 'previous' は直前の確定値（なければ null）。
+ */
+export function resolvePendingTimestamps(
+  value: unknown,
+  behavior: ServerTimestampBehavior,
+): unknown {
+  if (value instanceof PendingServerTimestamp) {
+    switch (behavior) {
+      case "estimate":
+        return value.estimate;
+      case "previous":
+        return value.previous ?? null;
+      default:
+        return null;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => resolvePendingTimestamps(v, behavior));
+  }
+  // プレーンオブジェクト（マップ）のみ再帰する。Timestamp / GeoPoint 等の
+  // クラスインスタンスはそのまま返す
+  if (typeof value === "object" && value !== null && value.constructor === Object) {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = resolvePendingTimestamps(v, behavior);
+    }
+    return result;
+  }
+  return value;
+}
+
 /** スナップショットのメタデータ */
 export class SnapshotMetadata {
   constructor(
@@ -100,15 +178,21 @@ export class DocumentSnapshot<T = DocumentData> {
     return this._data !== null;
   }
 
-  data(_options?: SnapshotOptions): T | undefined {
-    return this._data ?? undefined;
+  data(options?: SnapshotOptions): T | undefined {
+    if (this._data === null) return undefined;
+    // 保留中 serverTimestamp はローカル書き込み中にしか存在しないため、
+    // それ以外は走査コストを省く
+    if (!this.metadata.hasPendingWrites) return this._data;
+    return resolvePendingTimestamps(this._data, options?.serverTimestamps ?? "none") as T;
   }
 
   /** フィールドパスで指定したフィールドの値を取得する */
-  get(fieldPath: string | FieldPath): unknown {
+  get(fieldPath: string | FieldPath, options?: SnapshotOptions): unknown {
     if (!this._data) return undefined;
     const fp = typeof fieldPath === "string" ? new FieldPath(...fieldPath.split(".")) : fieldPath;
-    return fp.resolveValue(this._data as Record<string, unknown>);
+    const value = fp.resolveValue(this._data as Record<string, unknown>);
+    if (!this.metadata.hasPendingWrites) return value;
+    return resolvePendingTimestamps(value, options?.serverTimestamps ?? "none");
   }
 
   get createTime(): Timestamp | undefined {

@@ -69,8 +69,15 @@ describe("LocalStore", () => {
       expect(store.composeDocument("users/a")).toBeNull();
     });
 
-    it("serverTimestamp をローカル書き込み時刻で推定解決する", () => {
+    it("serverTimestamp を保留中マーカー（推定値 + 前回値）に解決する", () => {
       const { store } = setup();
+      store.applyRemoteDoc(
+        "users/a",
+        true,
+        { at: { __type: "timestamp", value: { seconds: 100, nanoseconds: 0 } } },
+        "t",
+        "t",
+      );
       void store
         .enqueue([
           {
@@ -81,9 +88,15 @@ describe("LocalStore", () => {
         ])
         .catch(() => {});
       const composed = store.composeDocument("users/a");
-      const at = composed?.data?.at as { __type: string; value: { seconds: number } };
-      expect(at.__type).toBe("timestamp");
-      expect(Math.abs(at.value.seconds - Date.now() / 1000)).toBeLessThan(5);
+      const at = composed?.data?.at as {
+        __type: string;
+        estimate: { value: { seconds: number } };
+        previous: unknown;
+      };
+      expect(at.__type).toBe("pendingServerTimestamp");
+      expect(Math.abs(at.estimate.value.seconds - Date.now() / 1000)).toBeLessThan(5);
+      // 直前の確定値を保持している（'previous' 解決用）
+      expect(at.previous).toEqual({ __type: "timestamp", value: { seconds: 100, nanoseconds: 0 } });
     });
 
     it("increment をキャッシュ値ベースで推定解決する", () => {

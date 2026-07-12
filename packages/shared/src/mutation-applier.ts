@@ -16,8 +16,15 @@ import type { DocumentData, SerializedTimestamp, SetOptions } from "./types.js";
 
 /** ミューテーション適用のコンテキスト */
 export interface MutationContext {
-  /** serverTimestamp センチネルの解決値を返す */
-  serverTimestamp: () => SerializedTimestamp;
+  /**
+   * serverTimestamp センチネルの解決値を返す。
+   *
+   * サーバーは確定タイムスタンプを返す。クライアント（レイテンシ補償）は
+   * 保留中マーカーを返し、SnapshotOptions.serverTimestamps に応じた解決を
+   * 読み取り時に行う。previousValue には既存フィールド値が渡される
+   * （'previous' 挙動用）。
+   */
+  serverTimestamp: (previousValue?: unknown) => unknown;
 }
 
 /**
@@ -155,7 +162,7 @@ function resolveValue(value: unknown, existingValue: unknown, ctx: MutationConte
   if (isFieldValueSentinel(value)) {
     switch (value.type) {
       case "serverTimestamp":
-        return ctx.serverTimestamp();
+        return ctx.serverTimestamp(existingValue);
       case "deleteField":
         return DELETE_MARKER;
       case "increment": {
