@@ -163,6 +163,39 @@ describe("RulesEvaluator", () => {
       );
     });
 
+    it("matches() は文字列全体のマッチ（本家 RE2 と同じ）", () => {
+      const evaluator = createEvaluator();
+      // アンカーなしパターンでも部分一致しない（本家: 'abcdef'.matches('abc') は false）
+      expect(evaluator.evaluateExpression("'abcdef'.matches('abc')", makeEvalContext())).toBe(
+        false,
+      );
+      expect(evaluator.evaluateExpression("'abc'.matches('abc')", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("'abcdef'.matches('abc.*')", makeEvalContext())).toBe(
+        true,
+      );
+      // 全体一致化は選択（|）を壊さない
+      expect(evaluator.evaluateExpression("'def'.matches('abc|def')", makeEvalContext())).toBe(
+        true,
+      );
+      expect(evaluator.evaluateExpression("'xdef'.matches('abc|def')", makeEvalContext())).toBe(
+        false,
+      );
+    });
+
+    it("matches() は RE2 に無い構文（後方参照 / ルックアラウンド）を拒否する", () => {
+      const evaluator = createEvaluator();
+      // 評価エラー → ルール全体としては拒否側に倒れる（本家のパースエラーと同方向）
+      expect(() =>
+        evaluator.evaluateExpression("'aa'.matches('(a)\\\\1')", makeEvalContext()),
+      ).toThrow(/backreference/);
+      expect(() =>
+        evaluator.evaluateExpression("'abc'.matches('a(?=b)')", makeEvalContext()),
+      ).toThrow(/lookaround/);
+      expect(() =>
+        evaluator.evaluateExpression("'abc'.matches('(?<=a)b')", makeEvalContext()),
+      ).toThrow(/lookaround/);
+    });
+
     it("should evaluate string.contains()", () => {
       const evaluator = createEvaluator();
       expect(
