@@ -12,6 +12,7 @@ import type {
 } from "@local-firestore/shared";
 import {
   nextTypeTag,
+  parseFieldPath,
   pathOrderKey,
   TYPE_TAG,
   validateQueryFilters,
@@ -91,8 +92,8 @@ export class QueryService {
     );
 
     // ベクトルは {__type:"vector", values:[...]} 形式または素の配列の両方を受け付ける
-    const fieldPath = escapePath(findNearest.fieldPath);
-    const fieldExpr = `COALESCE(json_extract(data, '$.${fieldPath}.values'), json_extract(data, '$.${fieldPath}'))`;
+    const fieldPath = jsonPathOf(findNearest.fieldPath);
+    const fieldExpr = `COALESCE(json_extract(data, '${fieldPath}."values"'), json_extract(data, '${fieldPath}'))`;
     const distanceExpr = `vector_distance(${fieldExpr}, ?, ?)`;
 
     const outerConditions = ["__distance IS NOT NULL"];
@@ -267,7 +268,7 @@ function buildSelectQuery(
 
 /** フィールド値を JSON テキストとして取り出す式（欠損時は SQL NULL） */
 function fieldJsonExpr(fieldPath: string): string {
-  return `data -> '$.${escapePath(fieldPath)}'`;
+  return `data -> '${jsonPathOf(fieldPath)}'`;
 }
 
 /** フィールド値の Firestore 順序キーを計算する式 */
@@ -280,8 +281,8 @@ function fieldKeyExpr(fieldPath: string): string {
  * 数値以外の型（文字列・boolean・null・マップ等）は NULL になり集計から除外される。
  */
 function numericFieldExpr(fieldPath: string): string {
-  const path = escapePath(fieldPath);
-  return `(CASE WHEN json_type(data, '$.${path}') IN ('integer', 'real') THEN json_extract(data, '$.${path}') END)`;
+  const path = jsonPathOf(fieldPath);
+  return `(CASE WHEN json_type(data, '${path}') IN ('integer', 'real') THEN json_extract(data, '${path}') END)`;
 }
 
 /**
@@ -588,12 +589,29 @@ function buildCursorClause(
   return { sql: `(${terms.join(" OR ")})`, sqlParams: params };
 }
 
-function escapePath(fieldPath: string): string {
-  // SQLインジェクション対策: フィールドパスに使える文字のみ許可
-  if (!/^[a-zA-Z0-9_.]+$/.test(fieldPath)) {
-    throw new Error(`Invalid field path: "${fieldPath}"`);
-  }
-  return fieldPath;
+/**
+ * フィールドパスを SQLite の JSON パス（'$."a"."b"'）へ変換する。
+ *
+ * バッククォートでエスケープされたセグメント（`with-dash` / `a.b` 等）を含む
+ * 任意のフィールド名を扱える。SQL 文字列リテラルへ埋め込むため、全セグメントを
+ * ダブルクォートで囲み、シングルクォートは '' へエスケープする（SQL
+ * インジェクション対策）。
+ */
+function jsonPathOf(fieldPath: string): string {
+  const segments = parseFieldPath(fieldPath);
+  const parts = segments.map((segment) => {
+    if (segment.length === 0) {
+      throw new QueryValidationError(`Invalid field path: "${fieldPath}"`);
+    }
+    if (segment.includes('"')) {
+      // SQLite の JSON パスではダブルクォートを含むキーを表現できない
+      throw new QueryValidationError(
+        `Unsupported field name in query: "${segment}" (contains a double quote)`,
+      );
+    }
+    return `"${segment}"`;
+  });
+  return `$.${parts.join(".")}`.replace(/'/g, "''");
 }
 
 interface RawRow {

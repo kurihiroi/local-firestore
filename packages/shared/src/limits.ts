@@ -1,3 +1,4 @@
+import { parseFieldPath } from "./field-path.js";
 import type { DocumentData } from "./types.js";
 
 /**
@@ -177,7 +178,8 @@ function findReservedFieldName(value: unknown): string | null {
   if (typeof value === "object" && value !== null) {
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       // ドット記法パス（updateDoc）の場合はセグメントごとに検査する
-      for (const segment of k.split(".")) {
+      // （バッククォートでエスケープされた予約名も本家同様に拒否する）
+      for (const segment of parseFieldPath(k)) {
         if (RESERVED_FIELD_NAME_PATTERN.test(segment)) {
           return segment;
         }

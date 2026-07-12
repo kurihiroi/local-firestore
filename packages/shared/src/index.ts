@@ -1,3 +1,4 @@
+export { formatFieldPath, parseFieldPath } from "./field-path.js";
 export {
   arrayContainsKey,
   computeFirestoreKey,

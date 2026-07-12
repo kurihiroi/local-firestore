@@ -131,6 +131,15 @@ describe("applyUpdateMutation", () => {
     expect(result).toEqual({ stats: { score: 13 } });
   });
 
+  it("バッククォートパスはドットを含むリテラルなフィールド名を更新する", () => {
+    const base = { "a.b": 1, a: { b: 2 } };
+    const literal = applyUpdateMutation(base, { "`a.b`": 9 }, ctx);
+    expect(literal).toEqual({ "a.b": 9, a: { b: 2 } });
+
+    const nested = applyUpdateMutation(base, { "a.b": 9 }, ctx);
+    expect(nested).toEqual({ "a.b": 1, a: { b: 9 } });
+  });
+
   it("ベースを変更しない（イミュータブル）", () => {
     const base = { a: 1, nested: { x: 1 } };
     applyUpdateMutation(base, { "nested.x": 2, a: deleteSentinel }, ctx);
