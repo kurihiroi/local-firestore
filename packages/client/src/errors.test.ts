@@ -2,20 +2,27 @@ import { describe, expect, it } from "vitest";
 import { WriteBatch } from "./batch.js";
 import { getFirestore } from "./firestore.js";
 import { collection, doc } from "./references.js";
-import { FirestoreError } from "./transport.js";
+import { FirebaseError, FirestoreError } from "./transport.js";
 
 describe("FirestoreError", () => {
   it("code と message を保持する", () => {
     const error = new FirestoreError("not-found", "Document not found");
     expect(error.code).toBe("not-found");
     expect(error.message).toBe("Document not found");
-    expect(error.name).toBe("FirestoreError");
+    // 本家の FirestoreError は FirebaseError を継承し name は "FirebaseError"
+    expect(error.name).toBe("FirebaseError");
   });
 
-  it("Error を継承している", () => {
+  it("Error / FirebaseError を継承している（本家互換）", () => {
     const error = new FirestoreError("invalid-argument", "Bad input");
     expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(FirebaseError);
     expect(error).toBeInstanceOf(FirestoreError);
+  });
+
+  it("err.name === 'FirebaseError' での判定コードが動く", () => {
+    const error: Error = new FirestoreError("permission-denied", "denied");
+    expect(error.name === "FirebaseError").toBe(true);
   });
 
   it("すべてのエラーコードを受け付ける", () => {

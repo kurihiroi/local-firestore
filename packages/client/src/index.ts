@@ -112,7 +112,7 @@ export { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
 export type { TransactionOptions } from "./transaction.js";
 export { runTransaction, Transaction } from "./transaction.js";
 // Transport & Errors
-export { FirestoreError } from "./transport.js";
+export { FirebaseError, FirestoreError } from "./transport.js";
 // Types
 export type {
   CollectionReference,
