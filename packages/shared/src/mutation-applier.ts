@@ -35,7 +35,9 @@ export interface MutationContext {
  * 全 serverTimestamp を単一のコミット時刻に統一する）。
  * バッチ / トランザクションではコミット単位で 1 つのコンテキストを共有すること。
  */
-export function createServerMutationContext(commitTime: Date = new Date()): MutationContext {
+export function createServerMutationContext(commitTime: Date = new Date()): {
+  serverTimestamp: (previousValue?: unknown) => SerializedTimestamp;
+} {
   const resolved: SerializedTimestamp = {
     __type: "timestamp",
     value: {
