@@ -237,6 +237,59 @@ describe("findNearest()", () => {
       }),
     ).toThrow(FirestoreError);
   });
+
+  it("limitが1000を超える場合はエラー（本家仕様）", () => {
+    expect(() =>
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: [1],
+        limit: 1001,
+        distanceMeasure: "COSINE",
+      }),
+    ).toThrow(FirestoreError);
+    expect(() =>
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: [1],
+        limit: 1000,
+        distanceMeasure: "COSINE",
+      }),
+    ).not.toThrow();
+  });
+
+  it("queryVectorが2048次元を超える場合はエラー（本家仕様）", () => {
+    expect(() =>
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: new Array(2049).fill(0.5),
+        limit: 1,
+        distanceMeasure: "COSINE",
+      }),
+    ).toThrow(FirestoreError);
+    expect(() =>
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: new Array(2048).fill(0.5),
+        limit: 1,
+        distanceMeasure: "COSINE",
+      }),
+    ).not.toThrow();
+  });
+
+  it("不正なdistanceMeasureはエラー", () => {
+    try {
+      findNearest(itemsRef, {
+        vectorField: "embedding",
+        queryVector: [1],
+        limit: 1,
+        distanceMeasure: "L2" as unknown as "COSINE",
+      });
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(FirestoreError);
+      expect((e as FirestoreError).code).toBe("invalid-argument");
+    }
+  });
 });
 
 describe("クエリ制約の型定義 (2-5)", () => {

@@ -102,10 +102,33 @@ describe("QueryService", () => {
         expect(results.map((r) => r.documentId)).toEqual(["alice"]);
       });
 
-      it("未対応の演算子はエラーになる", () => {
+      it("範囲フィルタ（>= / <）でドキュメントIDの範囲を指定できる", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "__name__", op: ">=", value: "bob" },
+          { type: "where", fieldPath: "__name__", op: "<", value: "dave" },
+        ]);
+        expect(results.map((r) => r.documentId).sort()).toEqual(["bob", "charlie"]);
+      });
+
+      it("範囲フィルタは > / <= も使える", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "__name__", op: ">", value: "bob" },
+          { type: "where", fieldPath: "__name__", op: "<=", value: "dave" },
+        ]);
+        expect(results.map((r) => r.documentId).sort()).toEqual(["charlie", "dave"]);
+      });
+
+      it("範囲フィルタはフルパス指定でも比較できる", () => {
+        const results = queryService.executeQuery("users", [
+          { type: "where", fieldPath: "__name__", op: ">=", value: "users/charlie" },
+        ]);
+        expect(results.map((r) => r.documentId).sort()).toEqual(["charlie", "dave"]);
+      });
+
+      it("未対応の演算子（array-contains）はエラーになる", () => {
         expect(() =>
           queryService.executeQuery("users", [
-            { type: "where", fieldPath: "__name__", op: ">", value: "alice" },
+            { type: "where", fieldPath: "__name__", op: "array-contains", value: "alice" },
           ]),
         ).toThrow("Unsupported operator for documentId()");
       });
