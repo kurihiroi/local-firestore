@@ -29,6 +29,7 @@
     "@hono/node-server": "^1.13.0",
     "@local-firestore/shared": "workspace:*",
     "better-sqlite3": "^11.0.0",
+    "better-sqlite3-multiple-ciphers": "^12.11.1",
     "hono": "^4.7.0",
     "nanoid": "^5.1.0",
     "ws": "^8.19.0"

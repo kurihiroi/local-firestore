@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { DocumentRepository } from "../storage/repository.js";
+import type { CreateDatabaseOptions } from "../storage/sqlite.js";
 import { createDatabase } from "../storage/sqlite.js";
 import { DocumentService } from "./document.js";
 import { ListenerManager } from "./listener-manager.js";
@@ -54,7 +55,10 @@ export function resolveDatabasePath(basePath: string, databaseId: string): strin
 export class DatabaseManager {
   private instances = new Map<string, DatabaseInstance>();
 
-  constructor(private basePath: string = ":memory:") {}
+  constructor(
+    private basePath: string = ":memory:",
+    private databaseOptions: CreateDatabaseOptions = {},
+  ) {}
 
   /** デフォルトデータベースとして既存の DB / ListenerManager を登録する */
   registerDefault(db: Database.Database, listenerManager?: ListenerManager): DatabaseInstance {
@@ -76,7 +80,7 @@ export class DatabaseManager {
     const existing = this.instances.get(databaseId);
     if (existing) return existing;
 
-    const db = createDatabase(resolveDatabasePath(this.basePath, databaseId));
+    const db = createDatabase(resolveDatabasePath(this.basePath, databaseId), this.databaseOptions);
     const instance: DatabaseInstance = {
       databaseId,
       db,
