@@ -11,12 +11,10 @@ export function callStringMethod(str: string, method: string, args: RulesValue[]
     case "matches": {
       assertArgCount("matches", args, 1);
       const pattern = assertString(args[0], "matches argument");
-      try {
-        const regex = new RegExp(pattern);
-        return mkBool(regex.test(str));
-      } catch {
-        throw new Error(`Invalid regex pattern: ${pattern}`);
-      }
+      // 本家は RE2 で「文字列全体」のマッチ。アンカーなしパターンでも
+      // 部分一致にならないよう ^(?:...)$ で全体一致化する
+      const regex = compileRe2Pattern(pattern, `^(?:${pattern})$`);
+      return mkBool(regex.test(str));
     }
 
     case "split": {
@@ -42,12 +40,8 @@ export function callStringMethod(str: string, method: string, args: RulesValue[]
       assertArgCount("replace", args, 2);
       const pattern = assertString(args[0], "replace pattern");
       const replacement = assertString(args[1], "replace replacement");
-      try {
-        const regex = new RegExp(pattern, "g");
-        return mkString(str.replace(regex, replacement));
-      } catch {
-        throw new Error(`Invalid regex pattern: ${pattern}`);
-      }
+      const regex = compileRe2Pattern(pattern, pattern, "g");
+      return mkString(str.replace(regex, replacement));
     }
 
     case "contains": {
@@ -76,6 +70,50 @@ export function callStringMethod(str: string, method: string, args: RulesValue[]
 
     default:
       throw new Error(`Unknown string method: ${method}`);
+  }
+}
+
+/**
+ * RE2 方言のパターンを JS RegExp へコンパイルする。
+ *
+ * 本家の matches() / replace() は RE2 で評価される。JS RegExp にはあるが
+ * RE2 に存在しない後方参照・ルックアラウンドを含むパターンは、本家では
+ * パースエラー（→ 評価エラー → 拒否）になるため、ここでもエラーにして
+ * 「ローカルでだけ通る」乖離を防ぐ。
+ *
+ * @param rawPattern 検査対象の元パターン（エラーメッセージ用）
+ * @param source RegExp に渡すパターン（matches は ^(?:...)$ で全体一致化済み）
+ */
+function compileRe2Pattern(rawPattern: string, source: string, flags = ""): RegExp {
+  rejectRe2IncompatibleSyntax(rawPattern);
+  try {
+    return new RegExp(source, flags);
+  } catch {
+    throw new Error(`Invalid regex pattern: ${rawPattern}`);
+  }
+}
+
+/** RE2 に存在しない構文（後方参照 / ルックアラウンド）を拒否する */
+function rejectRe2IncompatibleSyntax(pattern: string): void {
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\") {
+      const next = pattern[i + 1];
+      if (next >= "1" && next <= "9") {
+        throw new Error(`Invalid regex pattern (RE2 does not support backreferences): ${pattern}`);
+      }
+      i++; // エスケープされた文字はスキップ
+      continue;
+    }
+    if (ch === "(" && pattern[i + 1] === "?") {
+      const third = pattern[i + 2];
+      const fourth = pattern[i + 3];
+      if (third === "=" || third === "!" || (third === "<" && (fourth === "=" || fourth === "!"))) {
+        throw new Error(
+          `Invalid regex pattern (RE2 does not support lookaround assertions): ${pattern}`,
+        );
+      }
+    }
   }
 }
 
