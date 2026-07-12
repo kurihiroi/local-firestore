@@ -7,6 +7,11 @@ import type {
   TransactionCommitRequest,
   TransactionGetRequest,
 } from "@local-firestore/shared";
+import {
+  applySetMutation,
+  applyUpdateMutation,
+  createServerMutationContext,
+} from "@local-firestore/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import type { DocumentService } from "../services/document.js";
 import type { QueryService } from "../services/query.js";
@@ -20,6 +25,7 @@ import {
   type RuleEvaluationResult,
   type SecurityRulesEngine,
 } from "./rules-engine.js";
+import type { PendingWrites } from "./rules-evaluator/builtin-functions.js";
 
 /**
  * HTTPメソッドとパスからOperation種別を判定する
@@ -80,6 +86,43 @@ function denied(c: Context, result: RuleEvaluationResult) {
 }
 
 /**
+ * 書き込みオペレーション一覧から「書き込み後の状態」を構築する
+ * （getAfter() / existsAfter() が参照する。本家互換）。
+ *
+ * 同一ドキュメントへの連続オペレーションは前の適用結果をベースにする。
+ * ミューテーション適用に失敗した場合は素の書き込みデータで近似する
+ * （検証エラーはルール評価後の書き込み本体で改めて検出される）。
+ */
+function buildPendingWrites(
+  operations: BatchOperation[],
+  documentService: DocumentService | undefined,
+): PendingWrites {
+  const context = createServerMutationContext();
+  const map = new Map<string, Record<string, unknown> | null>();
+  for (const op of operations) {
+    const base = map.has(op.path)
+      ? map.get(op.path)
+      : (documentService?.getDocument(op.path)?.data ?? null);
+    if (op.type === "delete") {
+      map.set(op.path, null);
+      continue;
+    }
+    try {
+      const after =
+        op.type === "set"
+          ? applySetMutation(base ?? null, op.data ?? {}, op.options, context)
+          : base != null
+            ? applyUpdateMutation(base, op.data ?? {}, context)
+            : (op.data ?? {});
+      map.set(op.path, after);
+    } catch {
+      map.set(op.path, op.data ?? {});
+    }
+  }
+  return map;
+}
+
+/**
  * バッチ / トランザクションの書き込みオペレーション一覧をルール評価する。
  * 全て許可された場合は null、拒否された場合はその評価結果を返す。
  */
@@ -90,6 +133,8 @@ function evaluateWriteOperations(
   documentService: DocumentService | undefined,
   requestTime: Date,
 ): RuleEvaluationResult | null {
+  // 全オペレーション適用後の状態を getAfter() / existsAfter() へ束縛する
+  const pendingWrites = buildPendingWrites(operations, documentService);
   for (const op of operations) {
     const { collectionPath, documentId } = splitPath(op.path);
     const existing = documentService?.getDocument(op.path);
@@ -112,6 +157,7 @@ function evaluateWriteOperations(
       requestData: op.data,
       existingData: existing?.data,
       requestTime,
+      pendingWrites,
     });
     if (!result.allowed) {
       return {
@@ -306,6 +352,16 @@ export function securityRulesMiddleware(
       existingData = existing?.data;
     }
 
+    // 単一書き込みでも getAfter() / existsAfter() が使えるよう書き込み後状態を束縛する
+    let pendingWrites: PendingWrites | undefined;
+    if (operation === "create" || operation === "update" || operation === "delete") {
+      const opType = operation === "delete" ? "delete" : method === "PATCH" ? "update" : "set";
+      pendingWrites = buildPendingWrites(
+        [{ type: opType, path: docPath, data: requestData }],
+        documentService,
+      );
+    }
+
     const result = engine.evaluate(operation, {
       auth,
       path: docPath,
@@ -314,6 +370,7 @@ export function securityRulesMiddleware(
       requestData,
       existingData,
       requestTime,
+      pendingWrites,
     });
 
     if (!result.allowed) {

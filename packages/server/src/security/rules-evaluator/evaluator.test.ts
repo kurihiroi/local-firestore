@@ -647,6 +647,53 @@ describe("RulesEvaluator", () => {
       ).toThrow("Undefined variable in path interpolation: undefinedVar");
     });
 
+    it("getAfter() / existsAfter() は書き込み後の状態を参照する", () => {
+      const resolver = {
+        getDocument(path: string): Record<string, unknown> | null {
+          if (path === "items/current") return { v: 1 };
+          return null;
+        },
+      };
+      const evaluator = new RulesEvaluator(new BuiltinFunctionContext(resolver));
+      const pendingWrites = new Map<string, Record<string, unknown> | null>([
+        ["items/new", { v: 2 }],
+        ["items/current", null], // このバッチで削除される
+      ]);
+
+      // バッチ内で作成されるドキュメント（現在は未存在）が existsAfter で見える
+      expect(
+        evaluator.evaluateExpression(
+          "existsAfter('items/new')",
+          makeEvalContext({ pendingWrites }),
+        ),
+      ).toBe(true);
+      expect(
+        evaluator.evaluateExpression(
+          "getAfter('items/new').v == 2",
+          makeEvalContext({ pendingWrites }),
+        ),
+      ).toBe(true);
+
+      // バッチ内で削除されるドキュメントは existsAfter で false（現在は存在する）
+      expect(
+        evaluator.evaluateExpression(
+          "existsAfter('items/current')",
+          makeEvalContext({ pendingWrites }),
+        ),
+      ).toBe(false);
+      expect(
+        evaluator.evaluateExpression("exists('items/current')", makeEvalContext({ pendingWrites })),
+      ).toBe(true);
+
+      // 書き込み対象外のパスは現在の状態にフォールバック
+      expect(
+        evaluator.evaluateExpression(
+          "existsAfter('items/other')",
+          makeEvalContext({ pendingWrites }),
+        ),
+      ).toBe(false);
+    });
+
     it("should interpolate exists() path with wildcard bindings", () => {
       const resolver = {
         getDocument(path: string): Record<string, unknown> | null {

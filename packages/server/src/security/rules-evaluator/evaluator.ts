@@ -55,7 +55,7 @@ export class RulesEvaluator {
    * 文字列式を評価してブール値を返す
    */
   evaluateExpression(expr: string, ctx: EvaluationContext): boolean {
-    this.builtins.reset();
+    this.builtins.reset(ctx.pendingWrites ?? null);
     this.callStackDepth = 0;
 
     const parsed = Parser.parseRule(expr);
@@ -266,6 +266,10 @@ export class RulesEvaluator {
           return this.builtins.get(args);
         case "exists":
           return this.builtins.exists(args);
+        case "getAfter":
+          return this.builtins.getAfter(args);
+        case "existsAfter":
+          return this.builtins.existsAfter(args);
         case "debug":
           return this.builtins.debug(args);
         case "int": {

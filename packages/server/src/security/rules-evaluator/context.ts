@@ -1,5 +1,6 @@
 import type { DocumentData } from "@local-firestore/shared";
 import type { AuthContext, Operation } from "../rules-engine.js";
+import type { PendingWrites } from "./builtin-functions.js";
 import { documentDataToRulesMap } from "./special-types.js";
 import {
   mkInt,
@@ -28,6 +29,8 @@ export interface EvaluationContext {
   queryParams?: QueryParams;
   /** ワイルドカードにバインドされた変数 */
   wildcardBindings: Record<string, string>;
+  /** 評価中の書き込みの「書き込み後の状態」（getAfter / existsAfter 用） */
+  pendingWrites?: PendingWrites;
 }
 
 export interface QueryParams {
