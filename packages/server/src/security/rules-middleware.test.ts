@@ -548,4 +548,79 @@ describe("securityRulesMiddleware", () => {
       expect(res.status).toBe(200);
     });
   });
+
+  describe("getAfter / existsAfter（書き込み後状態の参照）", () => {
+    it("バッチ内で同時に作成されるドキュメントを existsAfter で検証できる", async () => {
+      const engine = new SecurityRulesEngine({
+        rules: {
+          orders: { write: "existsAfter('ledger/' + documentId)" },
+          ledger: { write: true },
+        },
+      });
+      const app = createTestAppWithRules(engine);
+
+      // 台帳ドキュメントを同時に書くバッチ → 許可
+      const ok = await request(app, "POST", "/batch", {
+        body: {
+          operations: [
+            { type: "set", path: "orders/o1", data: { total: 100 } },
+            { type: "set", path: "ledger/o1", data: { total: 100 } },
+          ],
+        },
+      });
+      expect(ok.status).toBe(200);
+
+      // 台帳書き込みなし → 参照整合性ルールが拒否
+      const ng = await request(app, "POST", "/batch", {
+        body: {
+          operations: [{ type: "set", path: "orders/o2", data: { total: 100 } }],
+        },
+      });
+      expect(ng.status).toBe(403);
+    });
+
+    it("getAfter で書き込み後のフィールド値を検証できる", async () => {
+      const engine = new SecurityRulesEngine({
+        rules: {
+          orders: { write: "getAfter('ledger/' + documentId).total == request.data.total" },
+          ledger: { write: true },
+        },
+      });
+      const app = createTestAppWithRules(engine);
+
+      const ok = await request(app, "POST", "/batch", {
+        body: {
+          operations: [
+            { type: "set", path: "orders/o1", data: { total: 100 } },
+            { type: "set", path: "ledger/o1", data: { total: 100 } },
+          ],
+        },
+      });
+      expect(ok.status).toBe(200);
+
+      // 金額が食い違うバッチ → 拒否
+      const ng = await request(app, "POST", "/batch", {
+        body: {
+          operations: [
+            { type: "set", path: "orders/o2", data: { total: 100 } },
+            { type: "set", path: "ledger/o2", data: { total: 999 } },
+          ],
+        },
+      });
+      expect(ng.status).toBe(403);
+    });
+
+    it("単一書き込みでも existsAfter が自身の書き込みを観測できる", async () => {
+      const engine = new SecurityRulesEngine({
+        rules: {
+          notes: { write: "existsAfter('notes/' + documentId)" },
+        },
+      });
+      const app = createTestAppWithRules(engine);
+      const res = await request(app, "PUT", "/docs/notes/n1", {
+        body: { data: { text: "hi" } },
+      });
+      expect(res.status).toBe(200);
+    });
+  });
 });

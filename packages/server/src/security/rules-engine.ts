@@ -3,6 +3,7 @@ import { parseDocumentPath } from "../utils/path.js";
 import {
   BuiltinFunctionContext,
   type DocumentResolver,
+  type PendingWrites,
 } from "./rules-evaluator/builtin-functions.js";
 import type { EvaluationContext, QueryParams } from "./rules-evaluator/context.js";
 import { RulesEvaluator } from "./rules-evaluator/evaluator.js";
@@ -62,6 +63,8 @@ export interface RuleContext {
   existingData?: DocumentData;
   /** リクエスト時刻 */
   requestTime?: Date;
+  /** 評価中の書き込みの「書き込み後の状態」（getAfter / existsAfter 用） */
+  pendingWrites?: PendingWrites;
   /** クエリパラメータ */
   queryParams?: QueryParams;
 }
@@ -171,6 +174,7 @@ export class SecurityRulesEngine {
         requestTime: context.requestTime ?? new Date(),
         queryParams: context.queryParams,
         wildcardBindings,
+        pendingWrites: context.pendingWrites,
       };
 
       const allowed = this.evaluator.evaluateExpression(fullExpr, evalContext);
