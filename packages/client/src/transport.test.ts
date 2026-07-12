@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FirestoreError, HttpTransport, isTransientError } from "./transport.js";
+import { FirebaseError, FirestoreError, HttpTransport, isTransientError } from "./transport.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -10,12 +10,14 @@ describe("FirestoreError", () => {
     const error = new FirestoreError("not-found", "Document not found");
     expect(error.code).toBe("not-found");
     expect(error.message).toBe("Document not found");
-    expect(error.name).toBe("FirestoreError");
+    // 本家同様 name は "FirebaseError"
+    expect(error.name).toBe("FirebaseError");
   });
 
-  it("Errorのインスタンスである", () => {
+  it("Error / FirebaseError のインスタンスである（本家互換）", () => {
     const error = new FirestoreError("internal", "Internal error");
     expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(FirebaseError);
     expect(error).toBeInstanceOf(FirestoreError);
   });
 

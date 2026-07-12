@@ -241,16 +241,38 @@ export class HttpTransport {
 }
 
 /**
- * Firebase互換のFirestoreErrorクラス
+ * `firebase/app` の `FirebaseError` 互換クラス
  *
- * firebase/firestoreの `FirestoreError` と同じインターフェースを提供する。
+ * 本家同様 `name` は "FirebaseError"。`err instanceof FirebaseError` /
+ * `err.name === "FirebaseError"` での判定コードが動くよう、
+ * FirestoreError はこのクラスを継承する。
  */
-export class FirestoreError extends Error {
-  readonly name = "FirestoreError";
+export class FirebaseError extends Error {
+  /** 本家 FirebaseError と同じく、サブクラスでも常に "FirebaseError" */
+  readonly name: string = "FirebaseError";
+
   constructor(
-    readonly code: FirestoreErrorCode,
+    readonly code: string,
     message: string,
+    public customData?: Record<string, unknown>,
   ) {
     super(message);
+    // Error のサブクラス化で instanceof が壊れないようにする（本家と同じ対策）
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Firebase互換のFirestoreErrorクラス
+ *
+ * firebase/firestoreの `FirestoreError` と同じインターフェースを提供する
+ * （本家同様 `FirebaseError` を継承し、`name` は "FirebaseError"）。
+ */
+export class FirestoreError extends FirebaseError {
+  declare readonly code: FirestoreErrorCode;
+
+  // biome-ignore lint/complexity/noUselessConstructor: code 引数を FirestoreErrorCode に絞るための再宣言
+  constructor(code: FirestoreErrorCode, message: string) {
+    super(code, message);
   }
 }
