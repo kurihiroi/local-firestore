@@ -1,4 +1,5 @@
 import type { FirestoreErrorCode } from "@local-firestore/shared";
+import { logDebug } from "./logger.js";
 
 /**
  * 認証トークンプロバイダー
@@ -13,15 +14,79 @@ export type AuthTokenProvider = () =>
   | undefined
   | Promise<string | null | undefined>;
 
+/** HTTP リクエストのリトライ・タイムアウト設定 */
+export interface TransportRetryOptions {
+  /** 1リクエストあたりの最大試行回数（初回を含む） */
+  maxAttempts?: number;
+  /** リトライの初期遅延（ミリ秒） */
+  initialDelayMs?: number;
+  /** リトライの最大遅延（ミリ秒） */
+  maxDelayMs?: number;
+  /** バックオフ倍率 */
+  backoffMultiplier?: number;
+  /** 1試行あたりのタイムアウト（ミリ秒） */
+  requestTimeoutMs?: number;
+}
+
+const DEFAULT_RETRY_OPTIONS: Required<TransportRetryOptions> = {
+  maxAttempts: 3,
+  initialDelayMs: 250,
+  maxDelayMs: 5000,
+  backoffMultiplier: 2,
+  requestTimeoutMs: 30000,
+};
+
+/** 一過性（リトライで解消しうる）のエラーコード */
+const TRANSIENT_ERROR_CODES: ReadonlySet<FirestoreErrorCode> = new Set([
+  "unavailable",
+  "deadline-exceeded",
+]);
+
+/**
+ * リトライで解消しうる一過性エラーかどうか
+ *
+ * ネットワーク断・タイムアウト・サーバー一時停止（503 等）が該当する。
+ * LocalStore の mutation 再送判定にも使われる。
+ */
+export function isTransientError(err: unknown): boolean {
+  return err instanceof FirestoreError && TRANSIENT_ERROR_CODES.has(err.code);
+}
+
+/** エラーレスポンスボディに code がない場合の HTTP ステータスからのフォールバック */
+function statusToErrorCode(status: number): FirestoreErrorCode {
+  switch (status) {
+    case 429:
+      return "resource-exhausted";
+    case 502:
+    case 503:
+      return "unavailable";
+    case 504:
+      return "deadline-exceeded";
+    default:
+      return "unknown";
+  }
+}
+
+/** リクエスト単位のオプション */
+interface RequestOptions {
+  /**
+   * false でトランスポート層のリトライを無効化する。
+   * 再送すると二重適用になりうるリクエスト（トランザクション commit）で使う。
+   */
+  retry?: boolean;
+}
+
 export class HttpTransport {
   private baseUrl: string;
   private wsUrl: string;
   private authTokenProvider?: AuthTokenProvider;
+  private retryOptions: Required<TransportRetryOptions>;
 
   /**
    * @param basePath 全リクエストパスに付与するプレフィックス
    *                 （マルチデータベース時の `/databases/:databaseId` など）
    * @param authTokenProvider リクエストごとに認証トークンを返す関数
+   * @param retryOptions リトライ・タイムアウト設定（省略時はデフォルト値）
    */
   constructor(
     host: string,
@@ -29,12 +94,14 @@ export class HttpTransport {
     ssl = false,
     basePath = "",
     authTokenProvider?: AuthTokenProvider,
+    retryOptions?: TransportRetryOptions,
   ) {
     const protocol = ssl ? "https" : "http";
     this.baseUrl = `${protocol}://${host}:${port}${basePath}`;
     const wsProtocol = ssl ? "wss" : "ws";
     this.wsUrl = `${wsProtocol}://${host}:${port}`;
     this.authTokenProvider = authTokenProvider;
+    this.retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...retryOptions };
   }
 
   getWebSocketUrl(): string {
@@ -77,65 +144,97 @@ export class HttpTransport {
   }
 
   async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      headers: await this.buildHeaders(false),
-    });
-    if (!res.ok) {
-      await this.handleError(res);
-    }
-    return res.json() as Promise<T>;
+    return this.request<T>("GET", path);
   }
 
-  async post<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: await this.buildHeaders(true),
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      await this.handleError(res);
-    }
-    return res.json() as Promise<T>;
+  async post<T>(path: string, body: unknown, options?: RequestOptions): Promise<T> {
+    return this.request<T>("POST", path, body, options);
   }
 
   async put<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "PUT",
-      headers: await this.buildHeaders(true),
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      await this.handleError(res);
-    }
-    return res.json() as Promise<T>;
+    return this.request<T>("PUT", path, body);
   }
 
   async patch<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "PATCH",
-      headers: await this.buildHeaders(true),
-      body: JSON.stringify(body),
-    });
+    return this.request<T>("PATCH", path, body);
+  }
+
+  async delete<T>(path: string): Promise<T> {
+    return this.request<T>("DELETE", path);
+  }
+
+  /**
+   * 一過性エラー（unavailable / deadline-exceeded）を指数バックオフ付きで
+   * リトライしながらリクエストを実行する。
+   */
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: RequestOptions,
+  ): Promise<T> {
+    const retryEnabled = options?.retry !== false;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.requestOnce<T>(method, path, body);
+      } catch (err) {
+        if (!retryEnabled || attempt >= this.retryOptions.maxAttempts || !isTransientError(err)) {
+          throw err;
+        }
+        const delay = this.backoffDelay(attempt);
+        logDebug(
+          `${method} ${path} failed transiently (attempt ${attempt}/${this.retryOptions.maxAttempts}), retrying in ${Math.round(delay)}ms: ${String(err)}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  private async requestOnce<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const hasBody = body !== undefined;
+    const headers = await this.buildHeaders(hasBody);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.retryOptions.requestTimeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        ...(hasBody ? { body: JSON.stringify(body) } : {}),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // ネットワーク層の失敗を FirestoreError に正規化する（生エラーを漏らさない）
+      if (controller.signal.aborted) {
+        throw new FirestoreError(
+          "deadline-exceeded",
+          `Request timed out after ${this.retryOptions.requestTimeoutMs}ms: ${method} ${path}`,
+        );
+      }
+      throw new FirestoreError(
+        "unavailable",
+        `Network request failed: ${method} ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       await this.handleError(res);
     }
     return res.json() as Promise<T>;
   }
 
-  async delete<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "DELETE",
-      headers: await this.buildHeaders(false),
-    });
-    if (!res.ok) {
-      await this.handleError(res);
-    }
-    return res.json() as Promise<T>;
+  /** ジッター付き指数バックオフの遅延を計算する（0.5〜1.0倍で分散） */
+  private backoffDelay(attempt: number): number {
+    const { initialDelayMs, backoffMultiplier, maxDelayMs } = this.retryOptions;
+    const base = Math.min(initialDelayMs * backoffMultiplier ** (attempt - 1), maxDelayMs);
+    return base * (0.5 + Math.random() * 0.5);
   }
 
   private async handleError(res: Response): Promise<never> {
     const body = await res.json().catch(() => ({}));
-    const code = ((body as Record<string, string>).code ?? "unknown") as FirestoreErrorCode;
+    const code = ((body as Record<string, string>).code ??
+      statusToErrorCode(res.status)) as FirestoreErrorCode;
     const message = (body as Record<string, string>).message ?? res.statusText;
     throw new FirestoreError(code, message);
   }

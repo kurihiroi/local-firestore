@@ -37,10 +37,17 @@ export async function runTransaction<T>(
 
     try {
       const result = await updateFunction(transaction);
-      await transport.post<TransactionCommitResponse>("/transaction/commit", {
-        transactionId,
-        operations: transaction._getOperations(),
-      });
+      // commit の再送はサーバーで適用済みの書き込みを二重適用しうるため
+      // トランスポート層のリトライを無効化する（競合時はここでの
+      // aborted リトライがトランザクション全体を再実行する）
+      await transport.post<TransactionCommitResponse>(
+        "/transaction/commit",
+        {
+          transactionId,
+          operations: transaction._getOperations(),
+        },
+        { retry: false },
+      );
       return result;
     } catch (e) {
       // コンフリクトならリトライ

@@ -13,7 +13,7 @@ import {
 } from "@local-firestore/shared";
 import { logDebug } from "./logger.js";
 import { isNetworkEnabled } from "./network-state.js";
-import { FirestoreError } from "./transport.js";
+import { FirestoreError, isTransientError } from "./transport.js";
 import type { Firestore } from "./types.js";
 
 /**
@@ -28,7 +28,8 @@ import type { Firestore } from "./types.js";
  *   enqueue（即時ローカル反映） → pending → HTTP ack → acknowledged
  *   → 該当ドキュメントのサーバースナップショット観測（updateTime >= ack）で除去。
  *   リスナー未購読のパスはスナップショットが届かないため ack 時点で即除去する。
- *   HTTP 失敗時は mutation を除去してロールバックする。
+ *   HTTP 失敗時: 一過性エラー（unavailable / deadline-exceeded）は mutation を
+ *   キューに保持したままバックオフ後に再送し、恒久エラーは除去してロールバックする。
  *
  * 設計: docs/2026-07-07-latency-compensation-design.md
  */
@@ -81,6 +82,13 @@ interface PendingMutation {
 /** ローカルビューの変更リスナー（変更されたドキュメントパスの集合を受け取る） */
 export type LocalStoreChangeListener = (changedPaths: ReadonlySet<string>) => void;
 
+/**
+ * 一過性エラー時の再送バックオフ（transport 内の短期リトライが尽きた後の長期リトライ）。
+ * 初期 1 秒から倍々で伸び、上限 30 秒。送信成功でリセットされる。
+ */
+const RETRY_INITIAL_DELAY_MS = 1000;
+const RETRY_MAX_DELAY_MS = 30000;
+
 function nowTimestamp(): SerializedTimestamp {
   const ms = Date.now();
   return {
@@ -109,6 +117,9 @@ export class LocalStore {
   /** doc リスナーが購読中のパス（参照カウント） */
   private docInterest = new Map<string, number>();
   private flushing = false;
+  /** 一過性エラー後の再送タイマー */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryDelayMs = RETRY_INITIAL_DELAY_MS;
 
   constructor(private firestore: Firestore) {}
 
@@ -346,12 +357,24 @@ export class LocalStore {
         try {
           next.ackedUpdateTimes = await this.send(next);
           next.state = "acknowledged";
+          this.retryDelayMs = RETRY_INITIAL_DELAY_MS;
           next.resolve();
         } catch (err) {
-          // 失敗した mutation はロールバック（除去して再合成）。後続は独立して送信する
+          const error = toFirestoreError(err);
+          if (isTransientError(error)) {
+            // 一過性エラー: 書き込みを失わないよう mutation をキューに保持し、
+            // バックオフ後に再送する。順序保証のため後続の送信も止める
+            next.sent = false;
+            logDebug(
+              `Mutation ${next.batchId} failed transiently, will retry in ${this.retryDelayMs}ms: ${error.message}`,
+            );
+            this.scheduleRetryFlush();
+            break;
+          }
+          // 恒久エラー: 失敗した mutation はロールバック（除去して再合成）。後続は独立して送信する
           logDebug(`Mutation ${next.batchId} rejected, rolling back: ${String(err)}`);
           this.removeMutation(next);
-          next.reject(toFirestoreError(err));
+          next.reject(error);
           continue;
         }
         const released = this.releaseSettledMutations();
@@ -380,6 +403,22 @@ export class LocalStore {
   clear(): void {
     this.remoteDocs.clear();
     this.mutations = [];
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.retryDelayMs = RETRY_INITIAL_DELAY_MS;
+  }
+
+  /** 一過性エラー後の再送をバックオフ付きでスケジュールする */
+  private scheduleRetryFlush(): void {
+    if (this.retryTimer) return;
+    const delay = this.retryDelayMs;
+    this.retryDelayMs = Math.min(this.retryDelayMs * 2, RETRY_MAX_DELAY_MS);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.flush();
+    }, delay);
   }
 
   private async send(mutation: PendingMutation): Promise<Map<string, string | undefined>> {
