@@ -7,10 +7,11 @@ import type {
   WithFieldValue,
 } from "@local-firestore/shared";
 import { getLocalStore } from "./local-store.js";
+import { isNetworkEnabled } from "./network-state.js";
 import { doc } from "./references.js";
 import { deserializeData, type SerializeOptions, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
-import { FirestoreError } from "./transport.js";
+import { FirestoreError, isTransientError } from "./transport.js";
 import type { CollectionReference, DocumentReference } from "./types.js";
 import { DocumentSnapshot, FieldPath, SnapshotMetadata } from "./types.js";
 
@@ -30,8 +31,35 @@ function serializeOptionsOf(firestore: { _ignoreUndefinedProperties?: boolean })
   return { ignoreUndefinedProperties: firestore._ignoreUndefinedProperties ?? false };
 }
 
-/** ドキュメントを取得する */
+/** オフライン時にキャッシュ未命中だった場合のエラーメッセージ（本家互換） */
+const OFFLINE_ERROR_MESSAGE = "Failed to get document because the client is offline.";
+
+/**
+ * ドキュメントを取得する（本家互換）
+ *
+ * サーバーから取得するが、ネットワーク無効時・サーバー到達不能時
+ * （一過性エラー）はローカルキャッシュへフォールバックし
+ * `fromCache: true` のスナップショットを返す。キャッシュ未命中の場合は
+ * 本家同様 `unavailable` エラーを投げる。
+ */
 export async function getDoc<T = DocumentData>(
+  reference: DocumentReference<T>,
+): Promise<DocumentSnapshot<T>> {
+  if (!isNetworkEnabled(reference._firestore)) {
+    return snapshotFromLocalStore(reference, OFFLINE_ERROR_MESSAGE);
+  }
+  try {
+    return await getDocFromServer(reference);
+  } catch (err) {
+    // 一過性エラー（transport のリトライ後も解消しないネットワーク断等）のみ
+    // フォールバックする。permission-denied 等の恒久エラーはそのまま投げる
+    if (!isTransientError(err)) throw err;
+    return snapshotFromLocalStore(reference, OFFLINE_ERROR_MESSAGE);
+  }
+}
+
+/** ドキュメントをサーバーから取得する（キャッシュフォールバックなし、本家互換） */
+export async function getDocFromServer<T = DocumentData>(
   reference: DocumentReference<T>,
 ): Promise<DocumentSnapshot<T>> {
   const transport = reference._firestore._transport;
@@ -75,13 +103,25 @@ export async function getDoc<T = DocumentData>(
 export async function getDocFromCache<T = DocumentData>(
   reference: DocumentReference<T>,
 ): Promise<DocumentSnapshot<T>> {
+  return snapshotFromLocalStore(
+    reference,
+    "Failed to get document from cache. (However, this document may exist on the server. " +
+      "Run again without source set to 'cache' to attempt to retrieve the document from the server.)",
+  );
+}
+
+/**
+ * ローカルビュー（サーバー確定値 + pending write の overlay）から
+ * `fromCache: true` のスナップショットを合成する。
+ * ドキュメントの状態が不明な場合は `unavailable` エラーを投げる。
+ */
+function snapshotFromLocalStore<T>(
+  reference: DocumentReference<T>,
+  missMessage: string,
+): DocumentSnapshot<T> {
   const composed = getLocalStore(reference._firestore).composeDocument(reference.path);
   if (!composed) {
-    throw new FirestoreError(
-      "unavailable",
-      "Failed to get document from cache. (However, this document may exist on the server. " +
-        "Run again without source set to 'cache' to attempt to retrieve the document from the server.)",
-    );
+    throw new FirestoreError("unavailable", missMessage);
   }
 
   const metadata = new SnapshotMetadata(composed.hasPendingWrites, true);
@@ -107,9 +147,6 @@ export async function getDocFromCache<T = DocumentData>(
     metadata,
   );
 }
-
-/** ドキュメントをサーバーから取得する（getDoc のエイリアス、本家互換） */
-export const getDocFromServer = getDoc;
 
 /** ドキュメントを作成/上書きする */
 export async function setDoc<T = DocumentData>(

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { addDoc, deleteDoc, getDoc, setDoc, updateDoc } from "./crud.js";
+import { addDoc, deleteDoc, getDoc, getDocFromServer, setDoc, updateDoc } from "./crud.js";
+import { getLocalStore } from "./local-store.js";
+import { setNetworkEnabled } from "./network-state.js";
+import { FirestoreError } from "./transport.js";
 import type { CollectionReference, DocumentReference, Firestore } from "./types.js";
 import { DocumentSnapshot, FieldPath } from "./types.js";
 
@@ -112,6 +115,69 @@ describe("getDoc()", () => {
     const snapshot = await getDoc(ref);
     expect(converter.fromFirestore).toHaveBeenCalled();
     expect(snapshot.data()).toEqual({ displayName: "Alice (30)" });
+  });
+});
+
+describe("getDoc() オフラインフォールバック", () => {
+  it("一過性エラー時はローカルキャッシュへフォールバックする", async () => {
+    const transport = createMockTransport();
+    transport.get.mockRejectedValue(new FirestoreError("unavailable", "server down"));
+    const firestore = createMockFirestore(transport);
+    getLocalStore(firestore).applyRemoteDoc("users/alice", true, { name: "Alice" }, "t1", "t2");
+
+    const snapshot = await getDoc(createMockDocRef(firestore, "users/alice"));
+
+    expect(snapshot.exists()).toBe(true);
+    expect(snapshot.data()).toEqual({ name: "Alice" });
+    expect(snapshot.metadata.fromCache).toBe(true);
+  });
+
+  it("一過性エラーかつキャッシュ未命中の場合は offline エラーを投げる", async () => {
+    const transport = createMockTransport();
+    transport.get.mockRejectedValue(new FirestoreError("deadline-exceeded", "timeout"));
+    const firestore = createMockFirestore(transport);
+
+    try {
+      await getDoc(createMockDocRef(firestore, "users/unknown"));
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(FirestoreError);
+      expect((e as FirestoreError).code).toBe("unavailable");
+      expect((e as FirestoreError).message).toContain("client is offline");
+    }
+  });
+
+  it("恒久エラー（permission-denied 等）はキャッシュがあってもフォールバックしない", async () => {
+    const transport = createMockTransport();
+    transport.get.mockRejectedValue(new FirestoreError("permission-denied", "denied"));
+    const firestore = createMockFirestore(transport);
+    getLocalStore(firestore).applyRemoteDoc("users/alice", true, { name: "Alice" }, "t1", "t2");
+
+    await expect(getDoc(createMockDocRef(firestore, "users/alice"))).rejects.toThrow("denied");
+  });
+
+  it("getDocFromServer はフォールバックせずエラーを投げる", async () => {
+    const transport = createMockTransport();
+    transport.get.mockRejectedValue(new FirestoreError("unavailable", "server down"));
+    const firestore = createMockFirestore(transport);
+    getLocalStore(firestore).applyRemoteDoc("users/alice", true, { name: "Alice" }, "t1", "t2");
+
+    await expect(getDocFromServer(createMockDocRef(firestore, "users/alice"))).rejects.toThrow(
+      "server down",
+    );
+  });
+
+  it("ネットワーク無効時はサーバーへ問い合わせずキャッシュから返す", async () => {
+    const transport = createMockTransport();
+    const firestore = createMockFirestore(transport);
+    setNetworkEnabled(firestore, false);
+    getLocalStore(firestore).applyRemoteDoc("users/alice", true, { name: "Alice" }, "t1", "t2");
+
+    const snapshot = await getDoc(createMockDocRef(firestore, "users/alice"));
+
+    expect(transport.get).not.toHaveBeenCalled();
+    expect(snapshot.data()).toEqual({ name: "Alice" });
+    expect(snapshot.metadata.fromCache).toBe(true);
   });
 });
 
