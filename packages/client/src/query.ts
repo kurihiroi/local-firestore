@@ -15,9 +15,10 @@ import {
   validateQueryFilters,
 } from "@local-firestore/shared";
 import { getLocalStore } from "./local-store.js";
+import { isNetworkEnabled } from "./network-state.js";
 import { deserializeData, serializeValue } from "./serialization.js";
 import { QueryDocumentSnapshot, QuerySnapshot } from "./snapshots.js";
-import { FirestoreError } from "./transport.js";
+import { FirestoreError, isTransientError } from "./transport.js";
 import type { CollectionReference, Firestore } from "./types.js";
 import { DocumentSnapshot, FieldPath, SnapshotMetadata } from "./types.js";
 import { VectorValue } from "./vector.js";
@@ -364,8 +365,35 @@ export function findNearest<T = DocumentData>(
 // getDocs
 // ============================================================
 
-/** クエリを実行してドキュメント一覧を取得する */
+/**
+ * クエリを実行してドキュメント一覧を取得する（本家互換）
+ *
+ * サーバーで実行するが、ネットワーク無効時・サーバー到達不能時
+ * （一過性エラー）はローカルキャッシュでのクエリ評価へフォールバックし
+ * `fromCache: true` のスナップショットを返す。
+ */
 export async function getDocs<T = DocumentData>(
+  queryOrRef: Query<T> | CollectionReference<T>,
+): Promise<QuerySnapshot<T>> {
+  const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
+
+  if (!isNetworkEnabled(q._firestore)) {
+    return getDocsFromCache(queryOrRef);
+  }
+  try {
+    return await getDocsFromServer(queryOrRef);
+  } catch (err) {
+    // 一過性エラー（transport のリトライ後も解消しないネットワーク断等）のみ
+    // フォールバックする。permission-denied 等の恒久エラーはそのまま投げる
+    if (!isTransientError(err)) throw err;
+    // findNearest はキャッシュ実行できないため元のエラーを投げ直す
+    if (q.constraints.some((c) => c.type === "findNearest")) throw err;
+    return getDocsFromCache(queryOrRef);
+  }
+}
+
+/** クエリをサーバーで実行する（キャッシュフォールバックなし、本家互換） */
+export async function getDocsFromServer<T = DocumentData>(
   queryOrRef: Query<T> | CollectionReference<T>,
 ): Promise<QuerySnapshot<T>> {
   const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
@@ -536,6 +564,3 @@ export async function getDocsFromCache<T = DocumentData>(
     new SnapshotMetadata(hasPendingWrites, true),
   );
 }
-
-/** クエリをサーバーで実行する（getDocs のエイリアス、本家互換） */
-export const getDocsFromServer = getDocs;

@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getFirestore } from "./firestore.js";
+import { getLocalStore } from "./local-store.js";
+import { setNetworkEnabled } from "./network-state.js";
 import type {
   QueryConstraintType,
   QueryFilterConstraint,
@@ -11,6 +13,8 @@ import {
   endAt,
   endBefore,
   findNearest,
+  getDocs,
+  getDocsFromServer,
   limit,
   limitToLast,
   or,
@@ -24,6 +28,7 @@ import {
 import { collection, doc } from "./references.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
+import type { Firestore } from "./types.js";
 import { DocumentSnapshot, FieldPath, Timestamp } from "./types.js";
 import { vector } from "./vector.js";
 
@@ -438,5 +443,82 @@ describe("validateConstraints（本家パリティのクエリバリデーショ
       limit(10),
     );
     expect(() => validateConstraints(q.constraints)).not.toThrow();
+  });
+});
+
+describe("getDocs() オフラインフォールバック", () => {
+  function createOfflineTestDb() {
+    const transport = {
+      get: vi.fn(),
+      post: vi.fn(),
+      put: vi.fn(),
+      patch: vi.fn(),
+      delete: vi.fn(),
+      getWebSocketUrl: vi.fn(),
+    };
+    const db = { type: "firestore", _transport: transport } as unknown as Firestore;
+    return { transport, db };
+  }
+
+  it("一過性エラー時はローカルキャッシュでのクエリ評価へフォールバックする", async () => {
+    const { transport, db } = createOfflineTestDb();
+    transport.post.mockRejectedValue(new FirestoreError("unavailable", "server down"));
+    getLocalStore(db).applyRemoteDocs([
+      { path: "users/alice", exists: true, data: { age: 30 }, createTime: "t", updateTime: "t" },
+      { path: "users/bob", exists: true, data: { age: 15 }, createTime: "t", updateTime: "t" },
+    ]);
+
+    const snapshot = await getDocs(query(collection(db, "users"), where("age", ">=", 18)));
+
+    expect(snapshot.docs.map((d) => d.id)).toEqual(["alice"]);
+    expect(snapshot.metadata.fromCache).toBe(true);
+  });
+
+  it("恒久エラー（permission-denied 等）はフォールバックしない", async () => {
+    const { transport, db } = createOfflineTestDb();
+    transport.post.mockRejectedValue(new FirestoreError("permission-denied", "denied"));
+    getLocalStore(db).applyRemoteDocs([
+      { path: "users/alice", exists: true, data: { age: 30 }, createTime: "t", updateTime: "t" },
+    ]);
+
+    await expect(getDocs(collection(db, "users"))).rejects.toThrow("denied");
+  });
+
+  it("getDocsFromServer はフォールバックせずエラーを投げる", async () => {
+    const { transport, db } = createOfflineTestDb();
+    transport.post.mockRejectedValue(new FirestoreError("unavailable", "server down"));
+    getLocalStore(db).applyRemoteDocs([
+      { path: "users/alice", exists: true, data: { age: 30 }, createTime: "t", updateTime: "t" },
+    ]);
+
+    await expect(getDocsFromServer(collection(db, "users"))).rejects.toThrow("server down");
+  });
+
+  it("ネットワーク無効時はサーバーへ問い合わせずキャッシュから返す", async () => {
+    const { transport, db } = createOfflineTestDb();
+    setNetworkEnabled(db, false);
+    getLocalStore(db).applyRemoteDocs([
+      { path: "users/alice", exists: true, data: { age: 30 }, createTime: "t", updateTime: "t" },
+    ]);
+
+    const snapshot = await getDocs(collection(db, "users"));
+
+    expect(transport.post).not.toHaveBeenCalled();
+    expect(snapshot.docs.map((d) => d.id)).toEqual(["alice"]);
+    expect(snapshot.metadata.fromCache).toBe(true);
+  });
+
+  it("findNearest クエリは一過性エラーでもキャッシュへフォールバックしない", async () => {
+    const { transport, db } = createOfflineTestDb();
+    transport.post.mockRejectedValue(new FirestoreError("unavailable", "server down"));
+
+    const q = findNearest(collection(db, "users"), {
+      vectorField: "embedding",
+      queryVector: [1, 2, 3],
+      limit: 5,
+      distanceMeasure: "EUCLIDEAN",
+    });
+
+    await expect(getDocs(q)).rejects.toThrow("server down");
   });
 });
