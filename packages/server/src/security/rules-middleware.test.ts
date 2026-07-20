@@ -255,7 +255,7 @@ describe("securityRulesMiddleware", () => {
     });
   });
 
-  describe("per-document list evaluation (rules are not filters)", () => {
+  describe("static list evaluation (rules are not filters)", () => {
     const engine = new SecurityRulesEngine({
       rules: {
         posts: {
@@ -275,17 +275,35 @@ describe("securityRulesMiddleware", () => {
       });
     }
 
-    it("should deny the whole query when results include a denied document", async () => {
+    it("should deny unconstrained queries regardless of result contents", async () => {
       const app = createTestAppWithRules(engine);
       await seedPosts(app);
 
-      // フィルタなしのクエリは private ドキュメントを含むため全体が拒否される
+      // フィルタなしのクエリはルールを静的に証明できないため拒否される
       const res = await request(app, "POST", "/query", {
         body: { collectionPath: "posts", constraints: [] },
       });
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.code).toBe("permission-denied");
+    });
+
+    it("should deny unconstrained queries even when all documents satisfy the rule", async () => {
+      const app = createTestAppWithRules(engine);
+      // 全ドキュメントが public でも、クエリ制約から証明できなければ拒否
+      // （本家の静的証明セマンティクス。実データ依存の per-document 評価では
+      // 許可されてしまい、本番との乖離＝偽陰性の原因だったケース）
+      await request(app, "PUT", "/docs/posts/pub1", {
+        body: { data: { visibility: "public", title: "A" } },
+      });
+      await request(app, "PUT", "/docs/posts/pub2", {
+        body: { data: { visibility: "public", title: "B" } },
+      });
+
+      const res = await request(app, "POST", "/query", {
+        body: { collectionPath: "posts", constraints: [] },
+      });
+      expect(res.status).toBe(403);
     });
 
     it("should allow a query constrained to satisfying documents", async () => {
@@ -304,7 +322,7 @@ describe("securityRulesMiddleware", () => {
       expect(body.docs[0].path).toBe("posts/pub1");
     });
 
-    it("should apply per-document evaluation to /aggregate", async () => {
+    it("should apply static evaluation to /aggregate", async () => {
       const app = createTestAppWithRules(engine);
       await seedPosts(app);
 
@@ -329,12 +347,32 @@ describe("securityRulesMiddleware", () => {
 
     it("should deny empty-result queries when rule requires resource", async () => {
       const app = createTestAppWithRules(engine);
-      // ドキュメントなし: コレクションレベルで1回評価され、resource == null で
-      // 評価エラー → 拒否（本家同様）
+      // ドキュメントなしでも同じ: 制約から証明できなければ拒否（本家同様）
       const res = await request(app, "POST", "/query", {
         body: { collectionPath: "posts", constraints: [] },
       });
       expect(res.status).toBe(403);
+    });
+
+    it("should apply static evaluation to /transaction/query", async () => {
+      const app = createTestAppWithRules(engine);
+      await seedPosts(app);
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await beginRes.json();
+
+      const denied = await request(app, "POST", "/transaction/query", {
+        body: { transactionId, collectionPath: "posts", constraints: [] },
+      });
+      expect(denied.status).toBe(403);
+
+      const allowed = await request(app, "POST", "/transaction/query", {
+        body: {
+          transactionId,
+          collectionPath: "posts",
+          constraints: [{ type: "where", fieldPath: "visibility", op: "==", value: "public" }],
+        },
+      });
+      expect(allowed.status).toBe(200);
     });
 
     it("should bind request.query.limit for list rules", async () => {

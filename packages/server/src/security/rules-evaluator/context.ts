@@ -10,6 +10,7 @@ import {
   mkPath,
   mkString,
   mkTimestamp,
+  mkUnknown,
   type RulesMap,
   type RulesValue,
   toRulesValue,
@@ -34,6 +35,16 @@ export interface EvaluationContext {
   pathWildcards?: ReadonlySet<string>;
   /** 評価中の書き込みの「書き込み後の状態」（getAfter / existsAfter 用） */
   pendingWrites?: PendingWrites;
+  /**
+   * list ルールの静的証明モード。resource は部分マップ（staticKnownData の
+   * フィールドのみ既知、それ以外は unknown）として束縛され、documentId /
+   * unknownBindings の変数は unknown になる。
+   */
+  staticList?: boolean;
+  /** クエリの等値制約から既知となった resource.data のフィールド（静的証明用） */
+  staticKnownData?: RulesMap;
+  /** unknown として束縛する変数名（静的証明時のドキュメントワイルドカード等） */
+  unknownBindings?: readonly string[];
 }
 
 export interface QueryParams {
@@ -60,8 +71,13 @@ export function buildGlobalScope(ctx: EvaluationContext): Map<string, RulesValue
     scope.set(name, ctx.pathWildcards?.has(name) ? mkPath(value) : mkString(value));
   }
 
+  // 静的証明時に不明な変数（ドキュメントワイルドカード等）
+  for (const name of ctx.unknownBindings ?? []) {
+    scope.set(name, mkUnknown());
+  }
+
   // documentId (後方互換)
-  scope.set("documentId", mkString(ctx.documentId));
+  scope.set("documentId", ctx.staticList ? mkUnknown() : mkString(ctx.documentId));
 
   // auth (後方互換: トップレベルでもアクセス可能)
   if (ctx.auth) {
@@ -126,6 +142,16 @@ function buildRequestObject(ctx: EvaluationContext): RulesMap {
 }
 
 function buildResourceObject(ctx: EvaluationContext): RulesValue {
+  // 静的証明モード: resource.data はクエリ制約から既知のフィールドのみを持つ
+  // 部分マップ、id / __name__ は unknown（対象ドキュメントは仮想的）
+  if (ctx.staticList) {
+    const map = new Map<string, RulesValue>();
+    map.set("data", ctx.staticKnownData ?? { typeName: "map", value: new Map(), partial: true });
+    map.set("id", mkUnknown());
+    map.set("__name__", mkUnknown());
+    return mkMap(map);
+  }
+
   if (!ctx.existingData) {
     return mkNull();
   }

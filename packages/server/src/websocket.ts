@@ -79,11 +79,13 @@ async function evaluateDocSubscription(
 /**
  * クエリサブスクリプションに対するセキュリティルール評価の準備。
  *
- * - ルールが resource / documentId を参照しない場合はこの場で1回評価し、
- *   拒否なら理由文字列を返す（ガード不要）
- * - per-document 評価が必要な場合は、スナップショットのドキュメント群を評価する
- *   ガード関数を返す。初回スナップショットと以降の追加・変更ドキュメントに対して
- *   ListenerManager から呼び出され、拒否に転じた場合は購読が終了する
+ * - 通常のコレクションクエリはクエリ制約からの静的証明（evaluateListStatic）で
+ *   この場で1回評価し、拒否なら理由文字列を返す（本家の「ルールはフィルタでは
+ *   ない」セマンティクス。ガード不要）
+ * - コレクショングループクエリは実ドキュメントパスでのルールマッチが必要なため、
+ *   スナップショットのドキュメント群を評価するガード関数を返す。初回スナップ
+ *   ショットと以降の追加・変更ドキュメントに対して ListenerManager から
+ *   呼び出され、拒否に転じた場合は購読が終了する
  */
 async function prepareQuerySubscription(
   deps: WebSocketDeps,
@@ -97,7 +99,7 @@ async function prepareQuerySubscription(
   const collectionGroup = msg.collectionGroup ?? false;
   const queryParams = extractQueryParams(msg.constraints);
 
-  if (engine.needsPerDocumentListEvaluation(collectionPath, collectionGroup)) {
+  if (collectionGroup && engine.needsPerDocumentListEvaluation(collectionPath, true)) {
     const guard: QueryRulesGuard = (docs) => {
       const result = engine.evaluateListQuery(
         { auth, collectionPath, collectionGroup, queryParams, requestTime: new Date() },
@@ -108,14 +110,19 @@ async function prepareQuerySubscription(
     return { deniedReason: null, guard };
   }
 
-  const result = engine.evaluate("list", {
-    auth,
-    path: collectionPath,
-    documentId: "",
-    collectionPath,
-    requestTime: new Date(),
-    queryParams,
-  });
+  const result = collectionGroup
+    ? engine.evaluate("list", {
+        auth,
+        path: collectionPath,
+        documentId: "",
+        collectionPath,
+        requestTime: new Date(),
+        queryParams,
+      })
+    : engine.evaluateListStatic(
+        { auth, collectionPath, requestTime: new Date(), queryParams },
+        msg.constraints,
+      );
   return {
     deniedReason: result.allowed ? null : (result.reason ?? "Permission denied by security rules"),
   };

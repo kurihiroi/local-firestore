@@ -1,10 +1,13 @@
 import type { BinaryOperator, UnaryOperator } from "../rules-parser/ast.js";
 import {
+  containsUnknown,
+  isUnknown,
   mkBool,
   mkFloat,
   mkInt,
   mkList,
   mkString,
+  mkUnknown,
   type RulesValue,
   rulesValueEquals,
   rulesValueToString,
@@ -15,6 +18,19 @@ import {
  * 二項演算子を評価する
  */
 export function evalBinaryOp(op: BinaryOperator, left: RulesValue, right: RulesValue): RulesValue {
+  // unknown の伝播（list ルールの静的証明）:
+  // && / || は Kleene の三値論理（evalLogicalAnd / Or 内で処理）、
+  // ==/!= は深い unknown 含有もチェック、その他の演算は unknown へ倒す
+  if (op !== "&&" && op !== "||") {
+    if (op === "==" || op === "!=") {
+      if (containsUnknown(left) || containsUnknown(right)) return mkUnknown();
+    } else if (op === "in") {
+      // evalIn 内で部分マップ・unknown を個別に処理する
+    } else if (isUnknown(left) || isUnknown(right)) {
+      return mkUnknown();
+    }
+  }
+
   switch (op) {
     case "&&":
       return evalLogicalAnd(left, right);
@@ -48,6 +64,7 @@ export function evalBinaryOp(op: BinaryOperator, left: RulesValue, right: RulesV
  * 単項演算子を評価する
  */
 export function evalUnaryOp(op: UnaryOperator, operand: RulesValue): RulesValue {
+  if (isUnknown(operand)) return mkUnknown();
   switch (op) {
     case "!":
       if (operand.typeName !== "bool") {
@@ -61,13 +78,21 @@ export function evalUnaryOp(op: UnaryOperator, operand: RulesValue): RulesValue 
   }
 }
 
+/** Kleene の三値論理 AND: false が支配的、true 同士のみ true、他は unknown */
 function evalLogicalAnd(left: RulesValue, right: RulesValue): RulesValue {
+  if (left.typeName === "bool" && !left.value) return mkBool(false);
+  if (right.typeName === "bool" && !right.value) return mkBool(false);
+  if (isUnknown(left) || isUnknown(right)) return mkUnknown();
   if (left.typeName !== "bool") throw new Error(`Cannot apply '&&' to type ${left.typeName}`);
   if (right.typeName !== "bool") throw new Error(`Cannot apply '&&' to type ${right.typeName}`);
   return mkBool(left.value && right.value);
 }
 
+/** Kleene の三値論理 OR: true が支配的、false 同士のみ false、他は unknown */
 function evalLogicalOr(left: RulesValue, right: RulesValue): RulesValue {
+  if (left.typeName === "bool" && left.value) return mkBool(true);
+  if (right.typeName === "bool" && right.value) return mkBool(true);
+  if (isUnknown(left) || isUnknown(right)) return mkUnknown();
   if (left.typeName !== "bool") throw new Error(`Cannot apply '||' to type ${left.typeName}`);
   if (right.typeName !== "bool") throw new Error(`Cannot apply '||' to type ${right.typeName}`);
   return mkBool(left.value || right.value);
@@ -253,19 +278,28 @@ function evalModulo(left: RulesValue, right: RulesValue): RulesValue {
 }
 
 function evalIn(left: RulesValue, right: RulesValue): RulesValue {
+  if (isUnknown(right)) return mkUnknown();
+
   // value in list
   if (right.typeName === "list") {
-    return mkBool(right.value.some((item) => rulesValueEquals(left, item)));
+    if (containsUnknown(left)) return mkUnknown();
+    if (right.value.some((item) => rulesValueEquals(left, item))) return mkBool(true);
+    // 一致なし: リスト側に unknown 要素があれば「含まれない」とは証明できない
+    return right.value.some(containsUnknown) ? mkUnknown() : mkBool(false);
   }
 
   // key in map
   if (right.typeName === "map") {
+    if (isUnknown(left)) return mkUnknown();
     if (left.typeName !== "string") throw new Error("Map key must be string for 'in' operator");
-    return mkBool(right.value.has(left.value));
+    if (right.value.has(left.value)) return mkBool(true);
+    // 部分マップは見えていないキーがあり得るため、不在は証明できない
+    return right.partial ? mkUnknown() : mkBool(false);
   }
 
   // value in set
   if (right.typeName === "set") {
+    if (containsUnknown(left) || right.elements.some(containsUnknown)) return mkUnknown();
     return mkBool(right.value.has(rulesValueToString(left)));
   }
 

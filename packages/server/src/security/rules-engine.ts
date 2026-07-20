@@ -1,4 +1,5 @@
 import type { DocumentData, SerializedQueryConstraint } from "@local-firestore/shared";
+import { parseFieldPath } from "@local-firestore/shared";
 import { parseDocumentPath } from "../utils/path.js";
 import {
   BuiltinFunctionContext,
@@ -7,6 +8,8 @@ import {
 } from "./rules-evaluator/builtin-functions.js";
 import type { EvaluationContext, QueryParams } from "./rules-evaluator/context.js";
 import { RulesEvaluator } from "./rules-evaluator/evaluator.js";
+import { documentValueToRulesValue } from "./rules-evaluator/special-types.js";
+import type { RulesMap, RulesValue } from "./rules-evaluator/types.js";
 import type { Expression, RuleExpression } from "./rules-parser/ast.js";
 import { Parser } from "./rules-parser/parser.js";
 
@@ -79,6 +82,14 @@ export interface RuleContext {
   pendingWrites?: PendingWrites;
   /** クエリパラメータ */
   queryParams?: QueryParams;
+  /**
+   * list ルールの静的証明モード（evaluateListStatic 用）。
+   * resource / documentId をクエリ制約から既知の値のみで束縛し、
+   * 証明できない参照は unknown として伝播させる。
+   */
+  staticList?: boolean;
+  /** クエリの等値制約から既知となった resource.data（部分マップ） */
+  staticKnownData?: RulesMap;
 }
 
 /** 認証コンテキスト */
@@ -165,9 +176,15 @@ export class SecurityRulesEngine {
     const pathWildcards = new Set(match.pathBindings);
 
     // ドキュメントレベルのワイルドカード（match /users/{userId} の userId）を束縛する
+    const unknownBindings: string[] = [];
     const docVar = matchedRule.documentWildcard;
     if (docVar) {
-      if (wildcardBindings[docVar] !== undefined && pathWildcards.has(docVar)) {
+      if (context.staticList) {
+        // 静的証明: 対象ドキュメントは仮想的なので ID は不明
+        delete wildcardBindings[docVar];
+        pathWildcards.delete(docVar);
+        unknownBindings.push(docVar);
+      } else if (wildcardBindings[docVar] !== undefined && pathWildcards.has(docVar)) {
         // 再帰ワイルドカードが最終セグメント: 消費済みセグメント + documentId でフルパス
         wildcardBindings[docVar] = `${wildcardBindings[docVar]}/${context.documentId}`;
       } else {
@@ -205,6 +222,9 @@ export class SecurityRulesEngine {
         wildcardBindings,
         pathWildcards,
         pendingWrites: context.pendingWrites,
+        staticList: context.staticList,
+        staticKnownData: context.staticKnownData,
+        unknownBindings,
       };
 
       const allowed = this.evaluator.evaluateExpression(fullExpr, evalContext);
@@ -213,6 +233,45 @@ export class SecurityRulesEngine {
       const message = error instanceof Error ? error.message : String(error);
       return { allowed: false, reason: `Rule evaluation error: ${message}`, rule: ruleValue };
     }
+  }
+
+  /**
+   * list クエリをクエリ制約からの静的証明で評価する（本家セマンティクス）。
+   *
+   * 本家の「ルールはフィルタではない」に従い、返却データの中身は参照せず、
+   * クエリの制約（where の等値フィルタ・limit / orderBy）だけからルールの
+   * 充足を証明できる場合のみ許可する。
+   *
+   * - `where('f', '==', v)` は `resource.data.f == v` の証明に使える
+   * - 制約から証明できない resource / documentId 参照は unknown となり、
+   *   Kleene の三値論理で伝播して最終結果が true と証明できなければ拒否
+   *
+   * コレクショングループクエリは実ドキュメントパスでのルールマッチが必要な
+   * ため対象外（従来どおり evaluateListQuery の per-document 近似を使う）。
+   */
+  evaluateListStatic(
+    context: ListQueryContext,
+    constraints?: ReadonlyArray<SerializedQueryConstraint>,
+  ): RuleEvaluationResult {
+    const result = this.evaluate("list", {
+      auth: context.auth,
+      path: context.collectionPath,
+      documentId: "",
+      collectionPath: context.collectionPath,
+      requestTime: context.requestTime ?? new Date(),
+      queryParams: context.queryParams,
+      staticList: true,
+      staticKnownData: knownDataFromConstraints(constraints),
+    });
+    if (!result.allowed && result.reason === undefined) {
+      return {
+        ...result,
+        reason:
+          "Rule could not be statically proven from query constraints " +
+          "(rules are not filters: add equality filters matching the rule)",
+      };
+    }
+    return result;
   }
 
   /**
@@ -457,6 +516,101 @@ export function extractQueryParams(
     params.orderBy = orderByParts.join(", ");
   }
   return params;
+}
+
+/** 等値制約ツリーのノード（ドットパスのネスト構築用） */
+interface KnownFieldNode {
+  children: Map<string, KnownFieldNode>;
+  /** 葉の確定値（ワイヤ形式）。hasValue が true のときのみ有効 */
+  value?: unknown;
+  hasValue: boolean;
+  /** 矛盾する制約が指定された場合は不明扱いに倒す */
+  dropped: boolean;
+}
+
+/**
+ * クエリ制約から「返却されるすべてのドキュメントで確実に成り立つ」
+ * resource.data のフィールド値を抽出し、部分マップとして返す。
+ *
+ * 対象はトップレベルの where（および and 複合内）の `==` フィルタのみ。
+ * or 複合・範囲フィルタは特定値を証明しないため対象外。
+ */
+function knownDataFromConstraints(
+  constraints: ReadonlyArray<SerializedQueryConstraint> | undefined,
+): RulesMap {
+  const root: KnownFieldNode = { children: new Map(), hasValue: false, dropped: false };
+
+  const insert = (fieldPath: string, value: unknown) => {
+    let segments: string[];
+    try {
+      segments = parseFieldPath(fieldPath);
+    } catch {
+      return;
+    }
+    if (segments.length === 0) return;
+    let node = root;
+    for (let i = 0; i < segments.length; i++) {
+      if (node.dropped) return;
+      if (node.hasValue) {
+        // 親パスが値で確定済み（例: a == {..} と a.b == 1 の併用）→ 不明扱い
+        node.hasValue = false;
+        node.value = undefined;
+        node.children.clear();
+        node.dropped = true;
+        return;
+      }
+      let child = node.children.get(segments[i]);
+      if (!child) {
+        child = { children: new Map(), hasValue: false, dropped: false };
+        node.children.set(segments[i], child);
+      }
+      node = child;
+    }
+    if (node.dropped) return;
+    if (node.children.size > 0 || (node.hasValue && !deepEqualsWire(node.value, value))) {
+      node.hasValue = false;
+      node.value = undefined;
+      node.children.clear();
+      node.dropped = true;
+      return;
+    }
+    node.value = value;
+    node.hasValue = true;
+  };
+
+  const collect = (cs: ReadonlyArray<SerializedQueryConstraint>) => {
+    for (const c of cs) {
+      if (c.type === "where") {
+        if (c.op === "==" && c.fieldPath !== "__name__") {
+          insert(c.fieldPath, c.value);
+        }
+      } else if (c.type === "and") {
+        collect(c.filters);
+      }
+      // or 複合は特定値を証明しないためスキップ
+    }
+  };
+  collect(constraints ?? []);
+
+  const toPartialMap = (node: KnownFieldNode): RulesMap => {
+    const map = new Map<string, RulesValue>();
+    for (const [key, child] of node.children) {
+      if (child.dropped) continue; // 不明キー（部分マップの欠損 = unknown）
+      if (child.hasValue) {
+        map.set(key, documentValueToRulesValue(child.value));
+      } else {
+        map.set(key, toPartialMap(child));
+      }
+    }
+    return { typeName: "map", value: map, partial: true };
+  };
+
+  return toPartialMap(root);
+}
+
+/** ワイヤ形式の値の等値比較（同一フィールドへの重複 == 制約の判定用） */
+function deepEqualsWire(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** ルール式が resource / documentId（ドキュメント単位の値）を参照するか */

@@ -41,6 +41,20 @@ export interface RulesList {
 export interface RulesMap {
   typeName: "map";
   value: Map<string, RulesValue>;
+  /**
+   * 部分マップ（list ルールの静的証明用）。true の場合、value に含まれる
+   * キーの値のみが既知で、それ以外のキーの有無・値は不明（unknown）を意味する。
+   */
+  partial?: boolean;
+}
+
+/**
+ * 値が不明であることを表す（list ルールの静的証明用）。
+ * クエリ制約から証明できない resource 参照などがこの値になり、
+ * 演算を通じて伝播する（Kleene の三値論理）。
+ */
+export interface RulesUnknown {
+  typeName: "unknown";
 }
 
 export interface RulesSet {
@@ -94,7 +108,8 @@ export type RulesValue =
   | RulesDuration
   | RulesLatLng
   | RulesPath
-  | RulesMapDiff;
+  | RulesMapDiff
+  | RulesUnknown;
 
 // ─── ヘルパー関数 ───
 
@@ -128,6 +143,37 @@ export function mkList(value: RulesValue[]): RulesList {
 
 export function mkMap(value: Map<string, RulesValue>): RulesMap {
   return { typeName: "map", value };
+}
+
+export function mkUnknown(): RulesUnknown {
+  return { typeName: "unknown" };
+}
+
+export function isUnknown(val: RulesValue): val is RulesUnknown {
+  return val.typeName === "unknown";
+}
+
+/**
+ * 値が unknown を含むかを深く判定する（==/!= の静的証明用）。
+ * 部分マップは「見えていないキーがあり得る」ため unknown を含む扱い。
+ */
+export function containsUnknown(val: RulesValue): boolean {
+  switch (val.typeName) {
+    case "unknown":
+      return true;
+    case "list":
+      return val.value.some(containsUnknown);
+    case "map":
+      if (val.partial) return true;
+      for (const v of val.value.values()) {
+        if (containsUnknown(v)) return true;
+      }
+      return false;
+    case "set":
+      return val.elements.some(containsUnknown);
+    default:
+      return false;
+  }
 }
 
 export function mkMapFromObject(obj: Record<string, unknown>): RulesMap {
@@ -226,6 +272,8 @@ export function rulesValueToString(val: RulesValue): string {
       return `{${Array.from(val.value).join(", ")}}`;
     case "map_diff":
       return "[MapDiff]";
+    case "unknown":
+      return "[unknown]";
   }
 }
 
@@ -291,6 +339,9 @@ export function rulesValueEquals(a: RulesValue, b: RulesValue): boolean {
       return true;
     }
     case "map_diff":
+      return false;
+    case "unknown":
+      // unknown 同士の等値は証明不能（呼び出し側が evalBinaryOp で unknown 伝播済み）
       return false;
   }
 }
