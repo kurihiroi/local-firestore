@@ -232,8 +232,9 @@ async function main() {
   // セキュリティルール（RULES_PATH 指定時のみ有効）
   const securityRules = createSecurityRulesEngine(logger, documentService);
 
-  // Cloud Functions トリガー（POST /triggers で Webhook 登録可能）
-  const triggerService = new TriggerService();
+  // Cloud Functions トリガー（POST /triggers で Webhook 登録可能。
+  // イベントは SQLite 永続キューで at-least-once 配信される）
+  const triggerService = new TriggerService(db);
 
   // 複合インデックスのバリデーション（INDEXES_PATH 指定時のみ有効）
   const indexManager = createIndexManager(logger);
