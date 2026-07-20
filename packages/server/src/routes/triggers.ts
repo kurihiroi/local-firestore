@@ -64,6 +64,23 @@ export function createTriggerRoutes(triggerService: TriggerService): Hono {
     return c.json({ triggers: triggerService.list() });
   });
 
+  // GET /triggers/dead-letters - 配信に失敗しデッドレター化したイベントの一覧
+  app.get("/triggers/dead-letters", (c) => {
+    return c.json({ deadLetters: triggerService.listDeadLetters() });
+  });
+
+  // POST /triggers/dead-letters/:id/retry - デッドレターを再キューする
+  app.post("/triggers/dead-letters/:id/retry", (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || !triggerService.retryDeadLetter(id)) {
+      return c.json<ErrorResponse>(
+        { code: "not-found", message: `Dead letter not found: ${c.req.param("id")}` },
+        404,
+      );
+    }
+    return c.json({ success: true });
+  });
+
   // DELETE /triggers/:id - トリガーを解除
   app.delete("/triggers/:id", (c) => {
     const id = c.req.param("id");
