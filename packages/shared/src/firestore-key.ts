@@ -34,16 +34,61 @@ export const TYPE_TAG = {
 const TERMINATOR = "\u0001";
 
 /**
- * 文字列を順序を保存したままエスケープする
+ * 文字列を UTF-8 バイト順（= Unicode コードポイント順）を保存する形でエスケープする
  *
- * U+0000〜U+0002 を U+0002 プレフィックスの2文字列に写像し、終端文字 U+0001 と
- * 衝突しないようにする（プレフィックス関係にある文字列の順序も保存される）。
+ * 本家 Firestore の文字列順序は UTF-8 バイト順。JS の生文字列比較は UTF-16
+ * コード単位順のため、サロゲートペア（U+10000 以上）が U+E000〜U+FFFF より
+ * 手前に来てしまう。そこで各コードポイントを UTF-8 バイト列へ展開し、
+ * 1 バイトを 1 文字（U+0000〜U+00FF）として並べる。この表現は
+ * - JS の文字列比較（クライアントの query-matcher）ではバイト順 = UTF-8 順
+ * - SQLite TEXT の memcmp（サーバーの firestore_key UDF）でも同順
+ *   （latin1 範囲の文字は UTF-8 で C2/C3 + 継続バイトになるが順序は保存される）
+ * になり、両者の比較が本家の順序と一致する。
+ *
+ * バイト値 0x00〜0x02 は U+0002 プレフィックスの2文字列に写像し、終端文字
+ * U+0001 と衝突しないようにする（プレフィックス関係にある文字列の順序も
+ * 保存される）。UTF-8 の継続バイト・リードバイトは 0x80 以上のため
+ * このエスケープと衝突することはない。
  */
 function escapeString(s: string): string {
   let result = "";
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
-    result += code <= 2 ? `\u0002${String.fromCharCode(code + 1)}` : s[i];
+    // ASCII（0x03〜0x7F）は UTF-8 でも1バイトそのまま
+    if (code >= 3 && code < 0x80) {
+      result += s[i];
+      continue;
+    }
+    if (code <= 2) {
+      result += `\u0002${String.fromCharCode(code + 1)}`;
+      continue;
+    }
+    // コードポイントを取得（サロゲートペアを合成。孤立サロゲートはそのまま扱う）
+    let cp = code;
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+      const next = s.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        cp = (code - 0xd800) * 0x400 + (next - 0xdc00) + 0x10000;
+        i++;
+      }
+    }
+    // UTF-8 バイト列へ展開（1バイト = 1文字）
+    if (cp < 0x800) {
+      result += String.fromCharCode(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+    } else if (cp < 0x10000) {
+      result += String.fromCharCode(
+        0xe0 | (cp >> 12),
+        0x80 | ((cp >> 6) & 0x3f),
+        0x80 | (cp & 0x3f),
+      );
+    } else {
+      result += String.fromCharCode(
+        0xf0 | (cp >> 18),
+        0x80 | ((cp >> 12) & 0x3f),
+        0x80 | ((cp >> 6) & 0x3f),
+        0x80 | (cp & 0x3f),
+      );
+    }
   }
   return result;
 }
@@ -167,10 +212,14 @@ export function valueKey(value: unknown): string {
   }
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).sort();
+    // 本家はマップキーも UTF-8 バイト順で比較する（Object.keys().sort() の
+    // UTF-16 順ではサロゲートペアのキーの位置がズレる）
+    const keys = Object.keys(record)
+      .map((k) => ({ k, escaped: escapeString(k) }))
+      .sort((a, b) => (a.escaped < b.escaped ? -1 : a.escaped > b.escaped ? 1 : 0));
     let result: string = TYPE_TAG.map;
-    for (const k of keys) {
-      result += escapeString(k) + TERMINATOR + valueKey(record[k]);
+    for (const { escaped, k } of keys) {
+      result += escaped + TERMINATOR + valueKey(record[k]);
     }
     return result + TERMINATOR;
   }

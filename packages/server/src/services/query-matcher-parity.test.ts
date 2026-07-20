@@ -41,6 +41,14 @@ const FIXTURE_DOCS: Array<{ path: string; data: Record<string, unknown> }> = [
   { path: "shelf/s-1/items/w", data: { n: 6, s: "wasabi" } },
   // 特殊文字を含むフィールド名（バッククォートエスケープの対象）
   { path: "items/i", data: { n: 7, s: "ichigo", "pri-ce": 100, "a.b": "literal" } },
+  // UTF-8 バイト順検証用（#39: サロゲートペア vs U+E000〜U+FFFF）
+  { path: "unicode/a", data: { s: "\uE000", m: { "\uE000": 1, "\u{1F600}": 2 } } },
+  { path: "unicode/b", data: { s: "\u{1F600}", m: { "\uE000": 1, "\u{1F600}": 3 } } },
+  { path: "unicode/c", data: { s: "\uFFFD", m: { "\uE000": 0, "\u{1F600}": 9 } } },
+  { path: "unicode/d", data: { s: "あいう" } },
+  // astral 文字を含むドキュメントID（__name__ タイブレーク順の検証）
+  { path: "unicode/\uE000", data: { s: "id-bmp" } },
+  { path: "unicode/\u{1F600}", data: { s: "id-astral" } },
 ];
 
 /** フィクスチャ: 代表的なクエリ制約の組合せ */
@@ -246,6 +254,34 @@ const FIXTURE_QUERIES: Array<{
     collectionGroup: true,
     constraints: [{ type: "startAfter", values: ["shelf/s/items/v"] }],
   },
+  {
+    name: "UTF-8 順: orderBy 文字列（astral vs BMP）",
+    collectionPath: "unicode",
+    constraints: [{ type: "orderBy", fieldPath: "s", direction: "asc" }],
+  },
+  {
+    name: "UTF-8 順: 文字列範囲フィルタ",
+    collectionPath: "unicode",
+    constraints: [{ type: "where", fieldPath: "s", op: ">", value: "\uE000" }],
+  },
+  {
+    name: "UTF-8 順: カーソル（BMP 末尾の次が astral）",
+    collectionPath: "unicode",
+    constraints: [
+      { type: "orderBy", fieldPath: "s", direction: "asc" },
+      { type: "startAfter", values: ["\uFFFD"] },
+    ],
+  },
+  {
+    name: "UTF-8 順: astral ドキュメントID の __name__ 順",
+    collectionPath: "unicode",
+    constraints: [],
+  },
+  {
+    name: "UTF-8 順: マップ値の orderBy（キー順が影響）",
+    collectionPath: "unicode",
+    constraints: [{ type: "orderBy", fieldPath: "m", direction: "asc" }],
+  },
 ];
 
 describe("query-matcher と QueryService のパリティ", () => {
@@ -276,4 +312,33 @@ describe("query-matcher と QueryService のパリティ", () => {
       expect(localResults).toEqual(serverResults);
     });
   }
+
+  // パリティ（server == client）に加え、本家の UTF-8 バイト順そのものを固定する
+  describe("本家準拠の期待順序（UTF-8 バイト順）", () => {
+    it("orderBy 文字列: ASCII → CJK → U+E000 → U+FFFD → astral の順", () => {
+      const results = queryService
+        .executeQuery("unicode", [{ type: "orderBy", fieldPath: "s", direction: "asc" }], false)
+        .map((r) => r.path);
+      expect(results).toEqual([
+        "unicode/\u{1F600}", // s: "id-astral"
+        "unicode/\uE000", // s: "id-bmp"
+        "unicode/d", // s: "あいう"
+        "unicode/a", // s: "\uE000"
+        "unicode/c", // s: "\uFFFD"
+        "unicode/b", // s: "\u{1F600}"（astral は BMP より後）
+      ]);
+    });
+
+    it("__name__ 順: astral ドキュメントID は BMP の ID より後", () => {
+      const results = queryService.executeQuery("unicode", [], false).map((r) => r.path);
+      expect(results).toEqual([
+        "unicode/a",
+        "unicode/b",
+        "unicode/c",
+        "unicode/d",
+        "unicode/\uE000",
+        "unicode/\u{1F600}",
+      ]);
+    });
+  });
 });
