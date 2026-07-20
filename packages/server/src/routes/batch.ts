@@ -24,7 +24,7 @@ import {
 
 export function createBatchRoutes(
   transactionService: TransactionService,
-  onDocumentChange?: (path: string) => void,
+  onDocumentsChange?: (paths: string[]) => void,
 ): Hono {
   const app = new Hono();
 
@@ -34,11 +34,9 @@ export function createBatchRoutes(
     try {
       validateWriteOperationCount(body.operations.length);
       const writeResults = transactionService.executeBatch(body.operations);
-      if (onDocumentChange) {
-        for (const op of body.operations) {
-          onDocumentChange(op.path);
-        }
-      }
+      // リスナー通知はオペレーション単位ではなくコミット単位でまとめて行う
+      // （購読ごとの再評価が変更パス数によらず最大1回になる）
+      onDocumentsChange?.(body.operations.map((op) => op.path));
       return c.json<BatchResponse>({ success: true, writeResults });
     } catch (e) {
       return handleError(c, e);
@@ -98,11 +96,7 @@ export function createBatchRoutes(
     try {
       validateWriteOperationCount(body.operations.length);
       const writeResults = transactionService.commit(body.transactionId, body.operations);
-      if (onDocumentChange) {
-        for (const op of body.operations) {
-          onDocumentChange(op.path);
-        }
-      }
+      onDocumentsChange?.(body.operations.map((op) => op.path));
       return c.json<TransactionCommitResponse>({ success: true, writeResults });
     } catch (e) {
       return handleError(c, e);
