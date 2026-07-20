@@ -32,7 +32,10 @@ async function createAuthProvider(logger: Logger): Promise<AuthProvider> {
     const { FirebaseAuthProvider } = await import("./security/firebase-auth-provider.js");
     const firebaseApp = initializeApp();
     logger.info("Using Firebase Auth provider");
-    return new FirebaseAuthProvider(getAuth(firebaseApp));
+    // 検証失敗（≠ トークン無し）は静かに匿名へ落ちるため、必ずログで可視化する
+    return new FirebaseAuthProvider(getAuth(firebaseApp), {
+      onVerificationFailure: (message) => logger.warn(message),
+    });
   }
   logger.info("Using Local Auth provider");
   return new LocalAuthProvider();
@@ -175,19 +178,38 @@ async function main() {
     output: logFormat === "json" ? new JsonLogOutput() : undefined,
   });
 
+  // graceful shutdown: 登録された後処理を LIFO で実行する
+  // （派生 DB の close / トリガータイマー解放 / プロセスロック解放）
+  const cleanupTasks: Array<() => void> = [];
+  let cleanedUp = false;
+  const runCleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    while (cleanupTasks.length > 0) {
+      try {
+        cleanupTasks.pop()?.();
+      } catch (err) {
+        logger.error(`Cleanup task failed: ${String(err)}`);
+      }
+    }
+  };
+  process.on("exit", runCleanup);
+  process.on("SIGINT", () => {
+    runCleanup();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    runCleanup();
+    process.exit(143);
+  });
+
   // 多重起動ガード: 同一 SQLite ファイルへの複数プロセス起動は
   // リアルタイム通知・トランザクション整合性を壊すため起動を拒否する
   // （1 プロセス = 1 SQLite ファイル。stale ロックは自動回収）
   try {
     const lock = acquireProcessLock(dbPath);
     if (lock) {
-      const releaseAndExit = (code: number) => {
-        lock.release();
-        process.exit(code);
-      };
-      process.on("exit", () => lock.release());
-      process.on("SIGINT", () => releaseAndExit(130));
-      process.on("SIGTERM", () => releaseAndExit(143));
+      cleanupTasks.push(() => lock.release());
     }
   } catch (err) {
     if (err instanceof ProcessLockError) {
@@ -246,6 +268,10 @@ async function main() {
     { encryptionKey, synchronous },
     listenerOptions,
   );
+  // シャットダウン時にメイン DB / 派生 DB を graceful close する
+  // （WAL の反映・派生 DB ロックの解放。LIFO なのでロック解放より先に実行される）
+  cleanupTasks.push(() => databaseManager.closeAll());
+  cleanupTasks.push(() => triggerService.dispose());
 
   const app = createApp(db, listenerManager, {
     logger,

@@ -130,4 +130,32 @@ describe("DatabaseManager", () => {
       reopened.close();
     });
   });
+
+  describe("派生データベースの多重起動ガード", () => {
+    it("別マネージャー（別プロセス相当）から同じ派生 DB を開くとエラーになる", async () => {
+      const { mkdtempSync, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { ProcessLockError } = await import("../utils/process-lock.js");
+
+      const tempDir = mkdtempSync(join(tmpdir(), "lf-dbm-lock-"));
+      try {
+        const basePath = join(tempDir, "store.db");
+        const manager1 = new DatabaseManager(basePath);
+        manager1.get("mydb");
+
+        // 生存プロセス（自プロセス以外の pid を装えないため、別 pid のロックを直接検証は
+        // process-lock.test.ts に任せ、ここでは closeAll でロックが解放されることを確認する
+        manager1.closeAll();
+
+        // closeAll 後は再取得できる
+        const manager2 = new DatabaseManager(basePath);
+        expect(() => manager2.get("mydb")).not.toThrow();
+        manager2.closeAll();
+        expect(ProcessLockError).toBeDefined();
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

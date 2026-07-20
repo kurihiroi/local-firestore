@@ -15,6 +15,7 @@ const CLEANUP_INTERVAL_MS = 60_000;
 
 export class TransactionService {
   private activeTxns = new Map<string, { reads: Map<string, number | null>; expiresAt: number }>();
+  private conflicts = 0;
   private repo: DocumentRepository;
   private docService: DocumentService;
   private cleanupTimer: ReturnType<typeof setInterval>;
@@ -57,6 +58,7 @@ export class TransactionService {
         const current = this.repo.get(path);
         const currentVersion = current?.version ?? null;
         if (currentVersion !== readVersion) {
+          this.conflicts++;
           throw new TransactionConflictError(path);
         }
       }
@@ -69,6 +71,11 @@ export class TransactionService {
     } finally {
       this.activeTxns.delete(transactionId);
     }
+  }
+
+  /** OCC 競合（aborted）の累計（メトリクス用） */
+  get conflictCount(): number {
+    return this.conflicts;
   }
 
   rollback(transactionId: string): void {

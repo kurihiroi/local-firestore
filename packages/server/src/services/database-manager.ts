@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { DocumentRepository } from "../storage/repository.js";
 import type { CreateDatabaseOptions } from "../storage/sqlite.js";
 import { createDatabase } from "../storage/sqlite.js";
+import { acquireProcessLock, type ProcessLock } from "../utils/process-lock.js";
 import { DocumentService } from "./document.js";
 import { ListenerManager, type ListenerManagerOptions } from "./listener-manager.js";
 import { QueryService } from "./query.js";
@@ -61,6 +62,9 @@ export class DatabaseManager {
     private listenerOptions: ListenerManagerOptions = {},
   ) {}
 
+  /** 派生データベースの多重起動ガード（closeAll で解放） */
+  private locks: ProcessLock[] = [];
+
   /** デフォルトデータベースとして既存の DB / ListenerManager を登録する */
   registerDefault(db: Database.Database, listenerManager?: ListenerManager): DatabaseInstance {
     const instance: DatabaseInstance = {
@@ -82,7 +86,11 @@ export class DatabaseManager {
     const existing = this.instances.get(databaseId);
     if (existing) return existing;
 
-    const db = createDatabase(resolveDatabasePath(this.basePath, databaseId), this.databaseOptions);
+    const path = resolveDatabasePath(this.basePath, databaseId);
+    // 派生 DB のファイルにもベース DB と同様の多重起動ガードを掛ける
+    const lock = acquireProcessLock(path);
+    if (lock) this.locks.push(lock);
+    const db = createDatabase(path, this.databaseOptions);
     const instance: DatabaseInstance = {
       databaseId,
       db,
@@ -108,11 +116,15 @@ export class DatabaseManager {
     return [...this.instances.values()];
   }
 
-  /** 全データベース接続をクローズする */
+  /** 全データベース接続をクローズし、派生 DB のロックを解放する */
   closeAll(): void {
     for (const instance of this.instances.values()) {
       instance.db.close();
     }
     this.instances.clear();
+    for (const lock of this.locks) {
+      lock.release();
+    }
+    this.locks = [];
   }
 }

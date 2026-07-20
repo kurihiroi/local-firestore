@@ -178,7 +178,13 @@ function buildDatabaseApp(
 
   // メトリクスエンドポイント
   app.get("/metrics", (c) => {
-    return c.json(metricsCollector.getMetrics());
+    return c.json({
+      ...metricsCollector.getMetrics(),
+      // リアルタイム系のゲージ（SLO 監視用）
+      activeSubscriptions: listenerManager?.subscriptionCount ?? 0,
+      subscribedConnections: listenerManager?.connectionCount ?? 0,
+      transactionConflicts: transactionService.conflictCount,
+    });
   });
 
   // ドキュメントルート
