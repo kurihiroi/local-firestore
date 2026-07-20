@@ -1,4 +1,8 @@
-import type { GetDocumentResponse, TransactionBeginResponse } from "@local-firestore/shared";
+import type {
+  GetDocumentResponse,
+  TransactionBeginResponse,
+  TransactionQueryResponse,
+} from "@local-firestore/shared";
 import type { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createTestApp, jsonBody, request } from "./test-helpers.js";
@@ -141,6 +145,44 @@ describe("Batch & Transaction Routes", () => {
         operations: [{ type: "update", path: "users/alice", data: { balance: 80 } }],
       });
       expect(commitRes.status).toBe(409);
+    });
+
+    it("query → commit のフローが動き、結果集合の変化で409を返す", async () => {
+      await request(app, "PUT", "/docs/items/a", { data: { category: "food", stock: 10 } });
+      await request(app, "PUT", "/docs/items/b", { data: { category: "tools", stock: 3 } });
+
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await jsonBody<TransactionBeginResponse>(beginRes);
+
+      const queryRes = await request(app, "POST", "/transaction/query", {
+        transactionId,
+        collectionPath: "items",
+        constraints: [{ type: "where", fieldPath: "category", op: "==", value: "food" }],
+      });
+      expect(queryRes.status).toBe(200);
+      const queryBody = await jsonBody<TransactionQueryResponse>(queryRes);
+      expect(queryBody.docs).toHaveLength(1);
+      expect(queryBody.docs[0].path).toBe("items/a");
+
+      // トランザクション外でクエリ結果集合に加わるドキュメントを作成（ファントム挿入）
+      await request(app, "PUT", "/docs/items/c", { data: { category: "food", stock: 1 } });
+
+      const commitRes = await request(app, "POST", "/transaction/commit", {
+        transactionId,
+        operations: [{ type: "update", path: "items/a", data: { stock: 9 } }],
+      });
+      expect(commitRes.status).toBe(409);
+      const commitBody = await jsonBody<{ code: string }>(commitRes);
+      expect(commitBody.code).toBe("aborted");
+    });
+
+    it("存在しないトランザクションでの query は404を返す", async () => {
+      const res = await request(app, "POST", "/transaction/query", {
+        transactionId: "nonexistent-txn-id-xx",
+        collectionPath: "items",
+        constraints: [],
+      });
+      expect(res.status).toBe(404);
     });
 
     it("rollbackでトランザクションを破棄できる", async () => {

@@ -2,6 +2,7 @@ import type {
   BatchOperation,
   DocumentMetadata,
   FirestoreErrorCode,
+  SerializedQueryConstraint,
   WriteResult,
 } from "@local-firestore/shared";
 import { createServerMutationContext } from "@local-firestore/shared";
@@ -9,20 +10,49 @@ import type Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import { DocumentRepository } from "../storage/repository.js";
 import { DocumentService } from "./document.js";
+import { QueryService } from "./query.js";
 
-const TRANSACTION_TTL_MS = 30_000;
+/** トランザクション有効期限のデフォルト（本家の約 270 秒に準拠） */
+const DEFAULT_TRANSACTION_TTL_MS = 270_000;
 const CLEANUP_INTERVAL_MS = 60_000;
 
+export interface TransactionServiceOptions {
+  /** トランザクションの有効期限（ms）。デフォルト 270_000（本家準拠） */
+  ttlMs?: number;
+}
+
+/** トランザクション内で実行されたクエリの記録（コミット時の競合検査用） */
+interface RecordedQuery {
+  collectionPath: string;
+  constraints: SerializedQueryConstraint[];
+  collectionGroup: boolean;
+  /** 実行時の結果フィンガープリント（path → version） */
+  results: Map<string, number>;
+}
+
+interface TransactionState {
+  reads: Map<string, number | null>;
+  queries: RecordedQuery[];
+  expiresAt: number;
+}
+
 export class TransactionService {
-  private activeTxns = new Map<string, { reads: Map<string, number | null>; expiresAt: number }>();
+  private activeTxns = new Map<string, TransactionState>();
   private conflicts = 0;
   private repo: DocumentRepository;
   private docService: DocumentService;
+  private queryService: QueryService;
   private cleanupTimer: ReturnType<typeof setInterval>;
+  private ttlMs: number;
 
-  constructor(private db: Database.Database) {
+  constructor(
+    private db: Database.Database,
+    options: TransactionServiceOptions = {},
+  ) {
     this.repo = new DocumentRepository(db);
     this.docService = new DocumentService(this.repo);
+    this.queryService = new QueryService(db);
+    this.ttlMs = options.ttlMs ?? DEFAULT_TRANSACTION_TTL_MS;
     this.cleanupTimer = setInterval(() => this.cleanupExpiredTxns(), CLEANUP_INTERVAL_MS);
   }
 
@@ -34,7 +64,8 @@ export class TransactionService {
     const id = nanoid(20);
     this.activeTxns.set(id, {
       reads: new Map(),
-      expiresAt: Date.now() + TRANSACTION_TTL_MS,
+      queries: [],
+      expiresAt: Date.now() + this.ttlMs,
     });
     return id;
   }
@@ -49,6 +80,31 @@ export class TransactionService {
     return doc;
   }
 
+  /**
+   * トランザクション内でクエリを実行し、結果集合を競合検査の対象として記録する。
+   *
+   * コミット時に同じクエリを再実行し、結果のフィンガープリント（path → version）が
+   * 変化していれば aborted にする。結果集合への挿入・削除（ファントム）も検出される。
+   */
+  query(
+    transactionId: string,
+    collectionPath: string,
+    constraints: SerializedQueryConstraint[],
+    collectionGroup = false,
+  ): DocumentMetadata[] {
+    const txn = this.getActiveTxn(transactionId);
+    const docs = this.queryService.executeQuery(collectionPath, constraints, collectionGroup);
+
+    txn.queries.push({
+      collectionPath,
+      constraints,
+      collectionGroup,
+      results: new Map(docs.map((doc) => [doc.path, doc.version])),
+    });
+
+    return docs;
+  }
+
   commit(transactionId: string, operations: BatchOperation[]): WriteResult[] {
     const txn = this.getActiveTxn(transactionId);
 
@@ -60,6 +116,20 @@ export class TransactionService {
         if (currentVersion !== readVersion) {
           this.conflicts++;
           throw new TransactionConflictError(path);
+        }
+      }
+
+      // クエリ競合検査: 記録済みクエリを再実行し、結果集合が変化していないかチェック
+      // （結果ドキュメントの更新に加え、挿入・削除によるファントムも検出する）
+      for (const recorded of txn.queries) {
+        const current = this.queryService.executeQuery(
+          recorded.collectionPath,
+          recorded.constraints,
+          recorded.collectionGroup,
+        );
+        if (this.queryResultsChanged(recorded.results, current)) {
+          this.conflicts++;
+          throw new TransactionConflictError(recorded.collectionPath, "query");
         }
       }
 
@@ -120,6 +190,19 @@ export class TransactionService {
     return results;
   }
 
+  /** クエリ結果のフィンガープリントが記録時から変化したかどうか */
+  private queryResultsChanged(recorded: Map<string, number>, current: DocumentMetadata[]): boolean {
+    if (current.length !== recorded.size) {
+      return true;
+    }
+    for (const doc of current) {
+      if (recorded.get(doc.path) !== doc.version) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private getActiveTxn(transactionId: string) {
     const txn = this.activeTxns.get(transactionId);
     if (!txn) {
@@ -144,8 +227,12 @@ export class TransactionService {
 
 export class TransactionConflictError extends Error {
   readonly code: FirestoreErrorCode = "aborted";
-  constructor(path: string) {
-    super(`Transaction conflict on document: ${path}`);
+  constructor(target: string, kind: "document" | "query" = "document") {
+    super(
+      kind === "query"
+        ? `Transaction conflict on query results: ${target}`
+        : `Transaction conflict on document: ${target}`,
+    );
     this.name = "TransactionConflictError";
   }
 }

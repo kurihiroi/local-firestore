@@ -525,6 +525,31 @@ describe("securityRulesMiddleware", () => {
       });
       expect(res.status).toBe(200);
     });
+
+    it("should deny unauthenticated POST /transaction/query", async () => {
+      const app = createTestAppWithRules(engine);
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await beginRes.json();
+
+      const res = await request(app, "POST", "/transaction/query", {
+        body: { transactionId, collectionPath: "users", constraints: [] },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("should allow authenticated POST /transaction/query", async () => {
+      const app = createTestAppWithRules(engine);
+      const beginRes = await request(app, "POST", "/transaction/begin");
+      const { transactionId } = await beginRes.json();
+
+      const res = await request(app, "POST", "/transaction/query", {
+        body: { transactionId, collectionPath: "users", constraints: [] },
+        headers: { Authorization: "Bearer user1" },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.docs).toEqual([]);
+    });
   });
 
   describe("non-docs routes should not be affected", () => {

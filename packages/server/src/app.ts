@@ -38,6 +38,11 @@ export interface AppOptions {
    * 超過時は 413 を返す。デフォルト 10 MiB、0 で無効。
    */
   maxRequestBodyBytes?: number;
+  /**
+   * トランザクションの有効期限（ms、`TRANSACTION_TTL_MS`）。
+   * デフォルト 270_000（本家の約 270 秒に準拠）。
+   */
+  transactionTtlMs?: number;
 }
 
 /** リクエストボディ上限のデフォルト（10 MiB。バッチ書き込みを考慮した本家 commit 相当） */
@@ -99,7 +104,7 @@ function buildDatabaseApp(
   const repo = new DocumentRepository(db);
   const documentService = new DocumentService(repo);
   const queryService = new QueryService(db);
-  const transactionService = new TransactionService(db);
+  const transactionService = new TransactionService(db, { ttlMs: options?.transactionTtlMs });
 
   const triggerService = options?.triggerService;
 
