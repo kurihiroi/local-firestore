@@ -5,6 +5,7 @@ import type {
   QueryDocumentData,
   SerializedQueryConstraint,
 } from "@local-firestore/shared";
+import { applyQueryConstraints, matchesQueryFilters } from "@local-firestore/shared";
 import type { WebSocket } from "ws";
 import type { QueryService } from "./query.js";
 
@@ -35,6 +36,14 @@ interface QuerySubscription {
   ws: WebSocket;
   /** 直前のドキュメントパス一覧（change判定用） */
   lastDocs: QueryDocumentData[];
+  /** lastDocs のパス集合（影響判定の O(1) 化） */
+  lastPathSet: Set<string>;
+  /**
+   * SQL 再実行なしの増分更新が可能か。limit / limitToLast は結果集合外の
+   * ドキュメントの繰り上がりが起きるため不可、findNearest はローカル評価
+   * 非対応のため不可（登録時に判定してキャッシュ）。
+   */
+  incremental: boolean;
   /** セキュリティルールガード（per-document 評価が必要な場合のみ設定される） */
   guard?: QueryRulesGuard;
 }
@@ -151,6 +160,10 @@ export class ListenerManager {
       constraints,
       ws,
       lastDocs: docs,
+      lastPathSet: new Set(docs.map((d) => d.path)),
+      incremental: !constraints.some(
+        (c) => c.type === "limit" || c.type === "limitToLast" || c.type === "findNearest",
+      ),
       guard,
     };
     this.subscriptions.set(subscriptionId, sub);
@@ -194,47 +207,122 @@ export class ListenerManager {
     changedPath: string,
     getDocument: (path: string) => DocumentMetadata | undefined,
   ): void {
+    this.notifyChanges([changedPath], getDocument);
+  }
+
+  /**
+   * 複数ドキュメントの変更をまとめて通知する（バッチ / トランザクション書き込み用）。
+   *
+   * 各サブスクリプションは変更パス数によらず最大1回だけ再評価される:
+   * - 影響判定: 変更ドキュメントが「現在の結果集合に含まれる」または
+   *   「クエリのフィルタにマッチする」場合のみ再評価する（それ以外は SQL も
+   *   差分計算も行わずスキップ）
+   * - 増分更新: limit / findNearest を含まないクエリは、保持している結果集合に
+   *   変更ドキュメントだけを適用してローカルで再計算する（SQL 再実行なし）
+   * - フォールバック: limit 付き等は従来どおり SQL を1回再実行する
+   */
+  notifyChanges(
+    changedPaths: Iterable<string>,
+    getDocument: (path: string) => DocumentMetadata | undefined,
+  ): void {
+    const paths = [...new Set(changedPaths)];
+    if (paths.length === 0) return;
+
+    // 変更ドキュメントの現在値をパスごとに1回だけ取得して全購読で共有する
+    const changedDocs = new Map<string, DocumentMetadata | undefined>();
+    for (const path of paths) {
+      changedDocs.set(path, getDocument(path));
+    }
+
     for (const sub of this.subscriptions.values()) {
       if (sub.ws.readyState !== 1 /* WebSocket.OPEN */) continue;
 
       if (sub.kind === "doc") {
-        if (sub.path === changedPath) {
-          const doc = getDocument(changedPath);
+        if (changedDocs.has(sub.path)) {
+          const doc = changedDocs.get(sub.path);
           sub.lastExists = !!doc;
           this.sendDocSnapshot(sub.ws, sub.subscriptionId, sub.path, doc);
         }
       } else {
-        // クエリリスナー: 変更されたドキュメントが影響するかチェック
-        if (this.queryMayBeAffected(sub, changedPath)) {
-          const newDocs = this.executeQuery(
-            sub.collectionPath,
-            sub.constraints,
-            sub.collectionGroup,
-          );
-          const changes = this.computeChanges(sub.lastDocs, newDocs);
-          if (changes.length > 0) {
-            // 追加・変更されたドキュメントをルール評価し、拒否に転じた場合は
-            // permission-denied を送って購読を終了する（本家と同じ挙動）
-            if (sub.guard) {
-              const changedPaths = new Set(
-                changes.filter((c) => c.type !== "removed").map((c) => c.path),
-              );
-              const docsToCheck = newDocs.filter((d) => changedPaths.has(d.path));
-              if (docsToCheck.length > 0) {
-                const deniedReason = sub.guard(docsToCheck);
-                if (deniedReason !== null) {
-                  this.unsubscribe(sub.subscriptionId);
-                  this.sendPermissionDenied(sub.ws, sub.subscriptionId, deniedReason);
-                  continue;
-                }
-              }
-            }
-            sub.lastDocs = newDocs;
-            this.sendQuerySnapshot(sub.ws, sub.subscriptionId, newDocs, changes);
-          }
+        this.notifyQuerySubscription(sub, paths, changedDocs);
+      }
+    }
+  }
+
+  /** クエリ購読1件に対する変更適用（影響判定 → 増分更新 or SQL 再実行 → 差分送信） */
+  private notifyQuerySubscription(
+    sub: QuerySubscription,
+    paths: string[],
+    changedDocs: Map<string, DocumentMetadata | undefined>,
+  ): void {
+    // 影響しうる変更パスの抽出。結果集合に含まれず、クエリのフィルタにも
+    // マッチしないドキュメントの変更はこの購読に影響しない
+    const affected: string[] = [];
+    for (const path of paths) {
+      if (!this.queryMayBeAffected(sub, path)) continue;
+      if (sub.lastPathSet.has(path)) {
+        affected.push(path);
+        continue;
+      }
+      const doc = changedDocs.get(path);
+      if (
+        doc &&
+        matchesQueryFilters(doc, sub.collectionPath, sub.collectionGroup, sub.constraints)
+      ) {
+        affected.push(path);
+      }
+    }
+    if (affected.length === 0) return;
+
+    let newDocs: QueryDocumentData[];
+    if (sub.incremental) {
+      // 増分更新: 保持している結果集合から変更パスを除き、現在値を加えて
+      // ローカルでクエリ制約を再適用する（フィルタ・カーソル・ソートを含む）
+      const affectedSet = new Set(affected);
+      const candidates: QueryDocumentData[] = sub.lastDocs.filter((d) => !affectedSet.has(d.path));
+      for (const path of affected) {
+        const doc = changedDocs.get(path);
+        if (doc) {
+          candidates.push({
+            path: doc.path,
+            data: doc.data,
+            createTime: doc.createTime,
+            updateTime: doc.updateTime,
+          });
+        }
+      }
+      newDocs = applyQueryConstraints(
+        candidates,
+        sub.collectionPath,
+        sub.collectionGroup,
+        sub.constraints,
+      );
+    } else {
+      newDocs = this.executeQuery(sub.collectionPath, sub.constraints, sub.collectionGroup);
+    }
+
+    const changes = this.computeChanges(sub.lastDocs, newDocs);
+    if (changes.length === 0) return;
+
+    // 追加・変更されたドキュメントをルール評価し、拒否に転じた場合は
+    // permission-denied を送って購読を終了する（本家と同じ挙動）
+    if (sub.guard) {
+      const changedInResult = new Set(
+        changes.filter((c) => c.type !== "removed").map((c) => c.path),
+      );
+      const docsToCheck = newDocs.filter((d) => changedInResult.has(d.path));
+      if (docsToCheck.length > 0) {
+        const deniedReason = sub.guard(docsToCheck);
+        if (deniedReason !== null) {
+          this.unsubscribe(sub.subscriptionId);
+          this.sendPermissionDenied(sub.ws, sub.subscriptionId, deniedReason);
+          return;
         }
       }
     }
+    sub.lastDocs = newDocs;
+    sub.lastPathSet = new Set(newDocs.map((d) => d.path));
+    this.sendQuerySnapshot(sub.ws, sub.subscriptionId, newDocs, changes);
   }
 
   /** アクティブなサブスクリプション数を返す */
@@ -310,6 +398,7 @@ export class ListenerManager {
           oldIndex: -1,
           newIndex: i,
         });
+      } else if (old.doc === newDoc) {
       } else if (
         old.doc.updateTime !== newDoc.updateTime ||
         JSON.stringify(old.doc.data) !== JSON.stringify(newDoc.data)

@@ -119,6 +119,22 @@ function buildDatabaseApp(
         }
       : undefined;
 
+  // バッチ / トランザクション用: リスナー再評価を購読ごとに最大1回へまとめる
+  const onDocumentsChange =
+    listenerManager || triggerService
+      ? (paths: string[]) => {
+          listenerManager?.notifyChanges(paths, (p) => documentService.getDocument(p));
+          if (triggerService) {
+            for (const path of paths) {
+              const newDocument = documentService.getDocument(path);
+              triggerService.notifyChange(path, undefined, newDocument).catch((err) => {
+                console.error("Trigger execution error:", err);
+              });
+            }
+          }
+        }
+      : undefined;
+
   const app = new Hono();
 
   const metricsCollector = options?.metricsCollector ?? new MetricsCollector();
@@ -204,7 +220,7 @@ function buildDatabaseApp(
   }
 
   // バッチ・トランザクションルート
-  app.route("/", createBatchRoutes(transactionService, onDocumentChange));
+  app.route("/", createBatchRoutes(transactionService, onDocumentsChange));
 
   // データエクスポート・インポートルート
   app.route("/", createDataRoutes(repo));

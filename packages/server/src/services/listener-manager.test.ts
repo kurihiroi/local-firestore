@@ -365,6 +365,205 @@ describe("ListenerManager", () => {
     });
   });
 
+  describe("増分再評価（SQL 再実行の抑制）", () => {
+    it("結果集合にもフィルタにも関係ない変更では SQL を再実行しない", () => {
+      const { manager, docService, queryService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("tasks/1", { title: "T1", done: true });
+      manager.subscribeQuery(ws, "sub1", "tasks", false, [
+        { type: "where", fieldPath: "done", op: "==", value: true },
+      ]);
+
+      const spy = vi.spyOn(queryService, "executeQuery");
+      // フィルタに合わないドキュメントの追加は影響しない
+      docService.setDocument("tasks/2", { title: "T2", done: false });
+      manager.notifyChange("tasks/2", getDoc);
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(ws.send).toHaveBeenCalledTimes(1); // 初回のみ
+    });
+
+    it("limit なしのクエリは SQL 再実行なしで増分更新される", () => {
+      const { manager, docService, queryService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("tasks/1", { title: "T1", n: 1 });
+      docService.setDocument("tasks/2", { title: "T2", n: 2 });
+      manager.subscribeQuery(ws, "sub1", "tasks", false, [
+        { type: "orderBy", fieldPath: "n", direction: "asc" },
+      ]);
+
+      const spy = vi.spyOn(queryService, "executeQuery");
+
+      // 追加（ソート位置は先頭になる）
+      docService.setDocument("tasks/0", { title: "T0", n: 0 });
+      manager.notifyChange("tasks/0", getDoc);
+      expect(spy).not.toHaveBeenCalled();
+      const added = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(added.docs.map((d: { path: string }) => d.path)).toEqual([
+        "tasks/0",
+        "tasks/1",
+        "tasks/2",
+      ]);
+      expect(added.changes).toHaveLength(1);
+      expect(added.changes[0]).toMatchObject({ type: "added", path: "tasks/0", newIndex: 0 });
+
+      // 更新（ソート位置が移動する）
+      docService.setDocument("tasks/0", { title: "T0", n: 10 });
+      manager.notifyChange("tasks/0", getDoc);
+      expect(spy).not.toHaveBeenCalled();
+      const moved = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[2][0] as string);
+      expect(moved.docs.map((d: { path: string }) => d.path)).toEqual([
+        "tasks/1",
+        "tasks/2",
+        "tasks/0",
+      ]);
+
+      // 削除
+      docService.deleteDocument("tasks/0");
+      manager.notifyChange("tasks/0", getDoc);
+      expect(spy).not.toHaveBeenCalled();
+      const removed = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[3][0] as string);
+      expect(removed.docs.map((d: { path: string }) => d.path)).toEqual(["tasks/1", "tasks/2"]);
+      expect(removed.changes[0]).toMatchObject({ type: "removed", path: "tasks/0" });
+    });
+
+    it("フィルタから外れる更新も増分で removed になる", () => {
+      const { manager, docService, queryService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("tasks/1", { title: "T1", done: true });
+      manager.subscribeQuery(ws, "sub1", "tasks", false, [
+        { type: "where", fieldPath: "done", op: "==", value: true },
+      ]);
+
+      const spy = vi.spyOn(queryService, "executeQuery");
+      docService.setDocument("tasks/1", { title: "T1", done: false });
+      manager.notifyChange("tasks/1", getDoc);
+
+      expect(spy).not.toHaveBeenCalled();
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.docs).toHaveLength(0);
+      expect(msg.changes[0]).toMatchObject({ type: "removed", path: "tasks/1" });
+    });
+
+    it("limit 付きクエリは影響時のみ SQL を1回再実行し、繰り上がりも正しい", () => {
+      const { manager, docService, queryService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("tasks/1", { n: 1 });
+      docService.setDocument("tasks/2", { n: 2 });
+      docService.setDocument("tasks/3", { n: 3 });
+      manager.subscribeQuery(ws, "sub1", "tasks", false, [
+        { type: "orderBy", fieldPath: "n", direction: "asc" },
+        { type: "limit", limit: 2 },
+      ]);
+      const initial = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as string);
+      expect(initial.docs.map((d: { path: string }) => d.path)).toEqual(["tasks/1", "tasks/2"]);
+
+      const spy = vi.spyOn(queryService, "executeQuery");
+
+      // 結果集合内のドキュメント削除 → SQL 再実行で tasks/3 が繰り上がる
+      docService.deleteDocument("tasks/1");
+      manager.notifyChange("tasks/1", getDoc);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.docs.map((d: { path: string }) => d.path)).toEqual(["tasks/2", "tasks/3"]);
+
+      // 結果集合外・フィルタ対象外の変更は SQL 再実行しない
+      // （limit 圏外だが orderBy フィールドを持つため影響候補にはなる点に注意:
+      //   ここでは結果集合外かつ既存メンバーでないため matches 判定が走る）
+      spy.mockClear();
+      docService.setDocument("others/x", { n: 0 });
+      manager.notifyChange("others/x", getDoc);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("カーソル付きクエリも増分更新で正しい結果集合になる", () => {
+      const { manager, docService, queryService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("tasks/1", { n: 1 });
+      docService.setDocument("tasks/2", { n: 2 });
+      manager.subscribeQuery(ws, "sub1", "tasks", false, [
+        { type: "orderBy", fieldPath: "n", direction: "asc" },
+        { type: "startAfter", values: [1] },
+      ]);
+      const initial = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as string);
+      expect(initial.docs.map((d: { path: string }) => d.path)).toEqual(["tasks/2"]);
+
+      const spy = vi.spyOn(queryService, "executeQuery");
+      // カーソル範囲内に入る追加
+      docService.setDocument("tasks/3", { n: 3 });
+      manager.notifyChange("tasks/3", getDoc);
+      expect(spy).not.toHaveBeenCalled();
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.docs.map((d: { path: string }) => d.path)).toEqual(["tasks/2", "tasks/3"]);
+
+      // カーソル範囲外の追加は結果を変えない（送信もされない）
+      docService.setDocument("tasks/0", { n: 0 });
+      manager.notifyChange("tasks/0", getDoc);
+      expect(ws.send).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("notifyChanges（バッチ通知）", () => {
+    it("複数パスの変更が購読ごとに1回のスナップショットへまとめられる", () => {
+      const { manager, docService, queryService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      manager.subscribeQuery(ws, "sub1", "tasks", false, []);
+
+      const spy = vi.spyOn(queryService, "executeQuery");
+      docService.setDocument("tasks/1", { n: 1 });
+      docService.setDocument("tasks/2", { n: 2 });
+      docService.setDocument("tasks/3", { n: 3 });
+      manager.notifyChanges(["tasks/1", "tasks/2", "tasks/3"], getDoc);
+
+      expect(spy).not.toHaveBeenCalled();
+      // 初回 + バッチ通知の計2回のみ（オペレーション数ぶん送信されない）
+      expect(ws.send).toHaveBeenCalledTimes(2);
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.docs).toHaveLength(3);
+      expect(msg.changes).toHaveLength(3);
+      expect(msg.changes.every((c: { type: string }) => c.type === "added")).toBe(true);
+    });
+
+    it("limit 付き購読への複数パス変更でも SQL 再実行は1回", () => {
+      const { manager, docService, queryService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      docService.setDocument("tasks/1", { n: 1 });
+      manager.subscribeQuery(ws, "sub1", "tasks", false, [
+        { type: "orderBy", fieldPath: "n", direction: "asc" },
+        { type: "limit", limit: 10 },
+      ]);
+
+      const spy = vi.spyOn(queryService, "executeQuery");
+      docService.setDocument("tasks/2", { n: 2 });
+      docService.setDocument("tasks/3", { n: 3 });
+      manager.notifyChanges(["tasks/2", "tasks/3"], getDoc);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.docs).toHaveLength(3);
+    });
+
+    it("重複パスは1回分にまとめられる", () => {
+      const { manager, docService, getDoc } = setupTestEnv();
+      const ws = createMockWs();
+
+      manager.subscribeQuery(ws, "sub1", "tasks", false, []);
+      docService.setDocument("tasks/1", { n: 1 });
+      manager.notifyChanges(["tasks/1", "tasks/1", "tasks/1"], getDoc);
+
+      expect(ws.send).toHaveBeenCalledTimes(2);
+      const msg = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as string);
+      expect(msg.changes).toHaveLength(1);
+    });
+  });
+
   describe("接続管理", () => {
     it("removeConnectionで全サブスクリプションが解除される", () => {
       const { manager, docService, getDoc } = setupTestEnv();
