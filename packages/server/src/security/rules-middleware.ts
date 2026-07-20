@@ -6,6 +6,7 @@ import type {
   QueryRequest,
   TransactionCommitRequest,
   TransactionGetRequest,
+  TransactionQueryRequest,
 } from "@local-firestore/shared";
 import {
   applySetMutation,
@@ -177,6 +178,7 @@ function evaluateWriteOperations(
  * - /query, /aggregate — list オペレーションとして評価
  * - /batch             — 各オペレーションを create / update / delete として評価
  * - /transaction/get   — get オペレーションとして評価
+ * - /transaction/query — list オペレーションとして評価
  * - /transaction/commit — 各オペレーションを create / update / delete として評価
  *
  * /admin/*, /health, /metrics, /export, /import, /triggers,
@@ -193,14 +195,17 @@ export function securityRulesMiddleware(
     const method = c.req.method;
     const requestTime = new Date();
 
-    // クエリ / 集計: list オペレーションとして評価
+    // クエリ / 集計 / トランザクション内クエリ: list オペレーションとして評価
     // ルールが resource / documentId を参照する場合は per-document 評価を行い、
     // 1件でも拒否があればクエリ全体を permission-denied にする（本家の
     // 「ルールはフィルタではない」セマンティクスの実用近似）
-    if ((reqPath === "/query" || reqPath === "/aggregate") && method === "POST") {
-      let body: QueryRequest | AggregateRequest;
+    if (
+      (reqPath === "/query" || reqPath === "/aggregate" || reqPath === "/transaction/query") &&
+      method === "POST"
+    ) {
+      let body: QueryRequest | AggregateRequest | TransactionQueryRequest;
       try {
-        body = await c.req.json<QueryRequest | AggregateRequest>();
+        body = await c.req.json<QueryRequest | AggregateRequest | TransactionQueryRequest>();
       } catch {
         return next();
       }

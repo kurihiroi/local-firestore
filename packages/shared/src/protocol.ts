@@ -164,6 +164,19 @@ export interface TransactionGetRequest {
   path: string;
 }
 
+/** POST /transaction/query リクエスト */
+export interface TransactionQueryRequest {
+  transactionId: string;
+  collectionPath: string;
+  collectionGroup?: boolean;
+  constraints: SerializedQueryConstraint[];
+}
+
+/** POST /transaction/query レスポンス */
+export interface TransactionQueryResponse {
+  docs: QueryDocumentData[];
+}
+
 /** POST /transaction/commit リクエスト */
 export interface TransactionCommitRequest {
   transactionId: string;

@@ -1,9 +1,13 @@
 import type Database from "better-sqlite3";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentRepository } from "../storage/repository.js";
 import { createDatabase } from "../storage/sqlite.js";
 import { DocumentService } from "./document.js";
-import { TransactionConflictError, TransactionService } from "./transaction.js";
+import {
+  TransactionConflictError,
+  TransactionExpiredError,
+  TransactionService,
+} from "./transaction.js";
 
 describe("TransactionService", () => {
   let db: Database.Database;
@@ -147,6 +151,124 @@ describe("TransactionService", () => {
       txnService.rollback(txnId);
 
       expect(() => txnService.getDocument(txnId, "users/alice")).toThrow();
+    });
+  });
+
+  describe("トランザクション内クエリの競合検査", () => {
+    beforeEach(() => {
+      docService.setDocument("items/a", { category: "food", stock: 10 });
+      docService.setDocument("items/b", { category: "food", stock: 5 });
+      docService.setDocument("items/c", { category: "tools", stock: 3 });
+    });
+
+    const foodQuery = [{ type: "where", fieldPath: "category", op: "==", value: "food" } as const];
+
+    it("query → commit の基本フローが動く（結果集合が不変ならコミット成功）", () => {
+      const txnId = txnService.begin();
+      const docs = txnService.query(txnId, "items", foodQuery);
+      expect(docs.map((d) => d.path).sort()).toEqual(["items/a", "items/b"]);
+
+      txnService.commit(txnId, [{ type: "update", path: "items/a", data: { stock: 9 } }]);
+
+      expect(docService.getDocument("items/a")!.data.stock).toBe(9);
+    });
+
+    it("クエリ結果のドキュメントが変更されたらコンフリクト", () => {
+      const txnId = txnService.begin();
+      txnService.query(txnId, "items", foodQuery);
+
+      // トランザクション外で結果集合内のドキュメントを更新
+      docService.updateDocument("items/b", { stock: 4 });
+
+      expect(() =>
+        txnService.commit(txnId, [{ type: "update", path: "items/a", data: { stock: 9 } }]),
+      ).toThrow(TransactionConflictError);
+    });
+
+    it("クエリに合致する新規ドキュメント（ファントム挿入）でコンフリクト", () => {
+      const txnId = txnService.begin();
+      txnService.query(txnId, "items", foodQuery);
+
+      // トランザクション外で結果集合に加わるドキュメントを作成
+      docService.setDocument("items/d", { category: "food", stock: 1 });
+
+      expect(() =>
+        txnService.commit(txnId, [{ type: "update", path: "items/a", data: { stock: 9 } }]),
+      ).toThrow(TransactionConflictError);
+    });
+
+    it("クエリ結果のドキュメントが削除されたらコンフリクト", () => {
+      const txnId = txnService.begin();
+      txnService.query(txnId, "items", foodQuery);
+
+      docService.deleteDocument("items/b");
+
+      expect(() =>
+        txnService.commit(txnId, [{ type: "update", path: "items/a", data: { stock: 9 } }]),
+      ).toThrow(TransactionConflictError);
+    });
+
+    it("クエリに合致しない無関係な変更はコンフリクトにならない", () => {
+      const txnId = txnService.begin();
+      txnService.query(txnId, "items", foodQuery);
+
+      // 結果集合外（category: tools）の変更は影響しない
+      docService.updateDocument("items/c", { stock: 2 });
+      docService.setDocument("items/e", { category: "tools", stock: 7 });
+
+      txnService.commit(txnId, [{ type: "update", path: "items/a", data: { stock: 9 } }]);
+
+      expect(docService.getDocument("items/a")!.data.stock).toBe(9);
+    });
+
+    it("クエリ競合も conflictCount に計上される", () => {
+      const before = txnService.conflictCount;
+
+      const txnId = txnService.begin();
+      txnService.query(txnId, "items", foodQuery);
+      docService.setDocument("items/d", { category: "food", stock: 1 });
+
+      expect(() => txnService.commit(txnId, [])).toThrow(TransactionConflictError);
+      expect(txnService.conflictCount).toBe(before + 1);
+    });
+  });
+
+  describe("有効期限（TTL）", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("デフォルトでは 30 秒経過しても期限切れにならない（本家準拠の約 270 秒）", () => {
+      vi.useFakeTimers();
+      docService.setDocument("users/alice", { name: "Alice" });
+
+      const txnId = txnService.begin();
+      vi.advanceTimersByTime(60_000);
+
+      expect(txnService.getDocument(txnId, "users/alice")!.data).toEqual({ name: "Alice" });
+    });
+
+    it("デフォルト TTL（270 秒）を超えると期限切れになる", () => {
+      vi.useFakeTimers();
+      const txnId = txnService.begin();
+      vi.advanceTimersByTime(271_000);
+
+      expect(() => txnService.getDocument(txnId, "users/alice")).toThrow(TransactionExpiredError);
+    });
+
+    it("ttlMs オプションで有効期限を変更できる", () => {
+      vi.useFakeTimers();
+      const shortTxnService = new TransactionService(db, { ttlMs: 1_000 });
+      try {
+        const txnId = shortTxnService.begin();
+        vi.advanceTimersByTime(1_001);
+
+        expect(() => shortTxnService.getDocument(txnId, "users/alice")).toThrow(
+          TransactionExpiredError,
+        );
+      } finally {
+        shortTxnService.dispose();
+      }
     });
   });
 });

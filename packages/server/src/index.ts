@@ -50,6 +50,7 @@ export type {
 export { IndexManager } from "./services/index-manager.js";
 export { ListenerManager } from "./services/listener-manager.js";
 export { QueryService } from "./services/query.js";
+export type { TransactionServiceOptions } from "./services/transaction.js";
 export {
   TransactionConflictError,
   TransactionExpiredError,

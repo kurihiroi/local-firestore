@@ -7,11 +7,14 @@ import type {
   TransactionCommitRequest,
   TransactionCommitResponse,
   TransactionGetRequest,
+  TransactionQueryRequest,
+  TransactionQueryResponse,
   TransactionRollbackRequest,
 } from "@local-firestore/shared";
 import { DocumentValidationError, validateWriteOperationCount } from "@local-firestore/shared";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { QueryValidationError } from "../services/query.js";
 import type { TransactionService } from "../services/transaction.js";
 import {
   TransactionConflictError,
@@ -66,6 +69,29 @@ export function createBatchRoutes(
     }
   });
 
+  // POST /transaction/query - トランザクション内でクエリ実行（結果集合を競合検査対象に記録）
+  app.post("/transaction/query", async (c) => {
+    const body = await c.req.json<TransactionQueryRequest>();
+    try {
+      const docs = transactionService.query(
+        body.transactionId,
+        body.collectionPath,
+        body.constraints,
+        body.collectionGroup ?? false,
+      );
+      return c.json<TransactionQueryResponse>({
+        docs: docs.map((doc) => ({
+          path: doc.path,
+          data: doc.data,
+          createTime: doc.createTime,
+          updateTime: doc.updateTime,
+        })),
+      });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
   // POST /transaction/commit - トランザクションコミット
   app.post("/transaction/commit", async (c) => {
     const body = await c.req.json<TransactionCommitRequest>();
@@ -95,6 +121,9 @@ export function createBatchRoutes(
 
 function handleError(c: Context, e: unknown) {
   if (e instanceof DocumentValidationError) {
+    return c.json<ErrorResponse>({ code: e.code, message: e.message }, 400);
+  }
+  if (e instanceof QueryValidationError) {
     return c.json<ErrorResponse>({ code: e.code, message: e.message }, 400);
   }
   if (e instanceof TransactionConflictError) {

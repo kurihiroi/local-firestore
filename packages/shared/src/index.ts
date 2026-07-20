@@ -65,6 +65,8 @@ export type {
   TransactionCommitRequest,
   TransactionCommitResponse,
   TransactionGetRequest,
+  TransactionQueryRequest,
+  TransactionQueryResponse,
   TransactionRollbackRequest,
   UnsubscribeMessage,
   UpdateDocumentRequest,

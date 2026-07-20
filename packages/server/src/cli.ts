@@ -281,6 +281,7 @@ async function main() {
     indexManager,
     databaseManager,
     maxRequestBodyBytes: envNonNegativeInt("MAX_REQUEST_BODY_BYTES"),
+    transactionTtlMs: envNonNegativeInt("TRANSACTION_TTL_MS"),
   });
 
   // TTL による期限切れドキュメントの自動削除（TTL_POLICIES 指定時のみ有効）
