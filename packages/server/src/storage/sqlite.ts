@@ -21,6 +21,23 @@ export class DatabaseOpenError extends Error {
   }
 }
 
+/** `PRAGMA synchronous` に指定できる値 */
+export type SynchronousMode = "OFF" | "NORMAL" | "FULL" | "EXTRA";
+
+const SYNCHRONOUS_MODES: readonly SynchronousMode[] = ["OFF", "NORMAL", "FULL", "EXTRA"];
+
+/** DB_SYNCHRONOUS 環境変数の値を検証して返す（不正値はエラー） */
+export function parseSynchronousMode(value: string | undefined): SynchronousMode | undefined {
+  if (value === undefined || value === "") return undefined;
+  const upper = value.toUpperCase() as SynchronousMode;
+  if (!SYNCHRONOUS_MODES.includes(upper)) {
+    throw new Error(
+      `Invalid DB_SYNCHRONOUS value: "${value}". Must be one of ${SYNCHRONOUS_MODES.join(", ")}.`,
+    );
+  }
+  return upper;
+}
+
 export interface CreateDatabaseOptions {
   /**
    * at-rest 暗号化キー（`DB_ENCRYPTION_KEY`）。指定時は better-sqlite3-multiple-ciphers
@@ -28,6 +45,12 @@ export interface CreateDatabaseOptions {
    * （永続化されないため暗号化対象がない）。
    */
   encryptionKey?: string;
+  /**
+   * `PRAGMA synchronous` の値（`DB_SYNCHRONOUS`）。デフォルトは NORMAL。
+   * NORMAL は電源断で直近トランザクション群を失う可能性があるため、
+   * 耐久性を優先する場合は FULL を指定する。
+   */
+  synchronous?: SynchronousMode;
 }
 
 export function createDatabase(
@@ -55,7 +78,7 @@ export function createDatabase(
     }
     throw err;
   }
-  db.pragma("synchronous = NORMAL");
+  db.pragma(`synchronous = ${options.synchronous ?? "NORMAL"}`);
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
 

@@ -13,8 +13,9 @@ export function createDataRoutes(repo: DocumentRepository): Hono {
   const app = new Hono();
 
   // GET /export - 全ドキュメントをエクスポート
+  // （単一トランザクション内で読み取り、スナップショット一貫性を保証する）
   app.get("/export", (c) => {
-    const allDocs = repo.listAll();
+    const allDocs = repo.exportSnapshot();
     const documents: ExportedDocument[] = allDocs.map((doc) => ({
       path: doc.path,
       data: doc.data,

@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import { type Logger, requestLogger } from "./middleware/logger.js";
 import { MetricsCollector, metricsMiddleware } from "./middleware/metrics.js";
 import { createAdminRoutes } from "./routes/admin-ui.js";
+import { createBackupRoutes } from "./routes/backup.js";
 import { createBatchRoutes } from "./routes/batch.js";
 import { createDataRoutes } from "./routes/data.js";
 import { createDocumentRoutes } from "./routes/documents.js";
@@ -171,6 +172,7 @@ function buildDatabaseApp(
 
   // 管理画面
   app.route("/", createAdminRoutes(repo));
+  app.route("/", createBackupRoutes(db));
 
   return app;
 }
