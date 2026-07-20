@@ -4,9 +4,11 @@ import {
   type FirestoreError,
   getFirestore,
   onSnapshot,
+  query,
   setDoc,
   Timestamp,
   terminate,
+  where,
 } from "@local-firestore/client";
 import type { SecurityRules } from "@local-firestore/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -555,7 +557,7 @@ describe("E2E: Security rules", () => {
     });
   });
 
-  describe("per-document list evaluation (rules are not filters)", () => {
+  describe("static list evaluation (rules are not filters)", () => {
     let ctx: TestContext;
     const rules: SecurityRules = {
       rules: {
@@ -629,24 +631,18 @@ describe("E2E: Security rules", () => {
       expect(body.data.total).toBe(1);
     });
 
-    it("should terminate a query listener when a denied document enters the result set", async () => {
+    it("should deny an unconstrained query listener upfront (static proof)", async () => {
       const db = getFirestore({ host: "localhost", port: ctx.port });
       try {
-        const snapshotPaths: string[][] = [];
-        let writeTriggered = false;
+        // 制約なしの購読はルールを静的に証明できないため、
+        // スナップショットを一度も配信せず即時拒否される
         const error = await new Promise<FirestoreError>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error("timeout: no error received")), 5000);
           onSnapshot(
             collection(db, "watched"),
-            (snap) => {
-              snapshotPaths.push(snap.docs.map((d) => d.ref.path));
-              // 初回スナップショット受信後、拒否対象のドキュメントを追加する
-              if (!writeTriggered) {
-                writeTriggered = true;
-                fetchWithAuth(ctx.port, "PUT", "/docs/watched/priv1", {
-                  data: { visibility: "private" },
-                }).catch(reject);
-              }
+            () => {
+              clearTimeout(timer);
+              reject(new Error("snapshot should not be delivered"));
             },
             (err) => {
               clearTimeout(timer);
@@ -655,11 +651,52 @@ describe("E2E: Security rules", () => {
           );
         });
         expect(error.code).toBe("permission-denied");
-        // 拒否対象のドキュメントは一度もリスナーに配信されない
-        expect(snapshotPaths.length).toBeGreaterThan(0);
-        for (const paths of snapshotPaths) {
-          expect(paths).toEqual(["watched/pub1"]);
-        }
+      } finally {
+        await terminate(db);
+      }
+    });
+
+    it("should keep a statically proven query listener alive across writes", async () => {
+      const db = getFirestore({ host: "localhost", port: ctx.port });
+      try {
+        const snapshots: string[][] = [];
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout: expected snapshots")), 5000);
+          const q = query(collection(db, "watched"), where("visibility", "==", "public"));
+          let writesTriggered = false;
+          onSnapshot(
+            q,
+            (snap) => {
+              snapshots.push(snap.docs.map((d) => d.ref.path).sort());
+              if (!writesTriggered) {
+                writesTriggered = true;
+                // ルール上拒否されるドキュメント（結果集合外）→ 許可されるドキュメントの順に追加。
+                // 購読は制約から証明済みのため、private の追加では終了しない
+                fetchWithAuth(ctx.port, "PUT", "/docs/watched/priv2", {
+                  data: { visibility: "private" },
+                })
+                  .then(() =>
+                    fetchWithAuth(ctx.port, "PUT", "/docs/watched/pub2", {
+                      data: { visibility: "public" },
+                    }),
+                  )
+                  .catch(reject);
+              }
+              if (snapshots[snapshots.length - 1].includes("watched/pub2")) {
+                clearTimeout(timer);
+                resolve();
+              }
+            },
+            (err) => {
+              clearTimeout(timer);
+              reject(err);
+            },
+          );
+        });
+        const last = snapshots[snapshots.length - 1];
+        expect(last).toContain("watched/pub1");
+        expect(last).toContain("watched/pub2");
+        expect(last).not.toContain("watched/priv2");
       } finally {
         await terminate(db);
       }

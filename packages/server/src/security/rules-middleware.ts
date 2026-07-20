@@ -196,9 +196,9 @@ export function securityRulesMiddleware(
     const requestTime = new Date();
 
     // クエリ / 集計 / トランザクション内クエリ: list オペレーションとして評価
-    // ルールが resource / documentId を参照する場合は per-document 評価を行い、
-    // 1件でも拒否があればクエリ全体を permission-denied にする（本家の
-    // 「ルールはフィルタではない」セマンティクスの実用近似）
+    // 通常のコレクションクエリはクエリ制約からの静的証明（本家の「ルールは
+    // フィルタではない」セマンティクス）。コレクショングループクエリは実
+    // ドキュメントパスでのルールマッチが必要なため per-document 評価の近似を使う
     if (
       (reqPath === "/query" || reqPath === "/aggregate" || reqPath === "/transaction/query") &&
       method === "POST"
@@ -218,7 +218,12 @@ export function securityRulesMiddleware(
       const queryParams = extractQueryParams(body.constraints);
 
       let result: RuleEvaluationResult;
-      if (queryService && engine.needsPerDocumentListEvaluation(collectionPath, collectionGroup)) {
+      if (!collectionGroup) {
+        result = engine.evaluateListStatic(
+          { auth, collectionPath, requestTime, queryParams },
+          body.constraints,
+        );
+      } else if (queryService && engine.needsPerDocumentListEvaluation(collectionPath, true)) {
         let docs: ListQueryDocument[];
         try {
           docs = queryService.executeQuery(collectionPath, body.constraints, collectionGroup);

@@ -28,6 +28,7 @@ import { callStringMethod } from "./string-methods.js";
 import { callTimestampMethod, callTimestampNamespace } from "./timestamp-methods.js";
 import {
   isTypeName,
+  isUnknown,
   mkBool,
   mkFloat,
   mkInt,
@@ -35,6 +36,7 @@ import {
   mkMap,
   mkNull,
   mkString,
+  mkUnknown,
   type RulesValue,
 } from "./types.js";
 
@@ -69,6 +71,10 @@ export class RulesEvaluator {
 
     const result = this.eval(parsed.expression, scope, functions);
 
+    // 静的証明（list ルール）で true と証明できなかった場合は拒否
+    if (result.typeName === "unknown") {
+      return false;
+    }
     if (result.typeName !== "bool") {
       throw new Error(`Rule expression must evaluate to bool, got ${result.typeName}`);
     }
@@ -179,6 +185,11 @@ export class RulesEvaluator {
 
     const obj = this.eval(node.object, scope, functions);
 
+    // unknown のプロパティアクセスは unknown（静的証明の伝播）
+    if (isUnknown(obj)) {
+      return mkUnknown();
+    }
+
     // null チェック
     if (obj.typeName === "null") {
       return mkNull();
@@ -188,6 +199,8 @@ export class RulesEvaluator {
     if (obj.typeName === "map") {
       const val = obj.value.get(node.property);
       if (val !== undefined) return val;
+      // 部分マップの未知キーは「存在しない」ではなく「不明」
+      if (obj.partial) return mkUnknown();
       throw new Error(`Property '${node.property}' not found in map`);
     }
 
@@ -202,6 +215,10 @@ export class RulesEvaluator {
     const obj = this.eval(node.object, scope, functions);
     const index = this.eval(node.index, scope, functions);
 
+    if (isUnknown(obj) || isUnknown(index)) {
+      return mkUnknown();
+    }
+
     if (obj.typeName === "list") {
       if (index.typeName !== "int") throw new Error("List index must be int");
       const i = index.value;
@@ -212,7 +229,10 @@ export class RulesEvaluator {
     if (obj.typeName === "map") {
       if (index.typeName !== "string") throw new Error("Map key must be string");
       const val = obj.value.get(index.value);
-      if (val === undefined) throw new Error(`Key '${index.value}' not found`);
+      if (val === undefined) {
+        if (obj.partial) return mkUnknown();
+        throw new Error(`Key '${index.value}' not found`);
+      }
       return val;
     }
 
@@ -259,6 +279,11 @@ export class RulesEvaluator {
     // グローバル関数呼び出し
     if (node.callee.type === "Identifier") {
       const funcName = node.callee.name;
+
+      // 組み込み関数への unknown 引数は unknown（カスタム関数は本体内で伝播させる）
+      if (funcName !== "debug" && args.some(isUnknown) && !functions.has(funcName)) {
+        return mkUnknown();
+      }
 
       // 組み込み関数
       switch (funcName) {
@@ -309,6 +334,18 @@ export class RulesEvaluator {
   }
 
   private callMethod(obj: RulesValue, method: string, args: RulesValue[]): RulesValue {
+    // unknown レシーバ / unknown 引数のメソッド呼び出しは unknown（静的証明の伝播）
+    if (isUnknown(obj) || args.some(isUnknown)) {
+      return mkUnknown();
+    }
+    // 部分マップのメソッドは get の既知キーのみ確定、それ以外は証明不能
+    if (obj.typeName === "map" && obj.partial) {
+      if (method === "get" && args.length >= 1 && args[0].typeName === "string") {
+        const val = obj.value.get(args[0].value);
+        if (val !== undefined) return val;
+      }
+      return mkUnknown();
+    }
     switch (obj.typeName) {
       case "string":
         return callStringMethod(obj.value, method, args);
@@ -383,19 +420,34 @@ export class RulesEvaluator {
     scope: Map<string, RulesValue>,
     functions: Map<string, FunctionDeclaration>,
   ): RulesValue {
-    // 短絡評価
+    // 短絡評価（unknown は Kleene の三値論理: false && unknown = false、
+    // true || unknown = true、それ以外の unknown 混在は unknown）
     if (node.operator === "&&") {
       const left = this.eval(node.left, scope, functions);
+      if (isUnknown(left)) {
+        const right = this.eval(node.right, scope, functions);
+        if (right.typeName === "bool" && !right.value) return mkBool(false);
+        return mkUnknown();
+      }
       if (left.typeName !== "bool") throw new Error(`Cannot apply '&&' to type ${left.typeName}`);
       if (!left.value) return mkBool(false);
-      return this.eval(node.right, scope, functions);
+      const right = this.eval(node.right, scope, functions);
+      if (isUnknown(right)) return mkUnknown();
+      return right;
     }
 
     if (node.operator === "||") {
       const left = this.eval(node.left, scope, functions);
+      if (isUnknown(left)) {
+        const right = this.eval(node.right, scope, functions);
+        if (right.typeName === "bool" && right.value) return mkBool(true);
+        return mkUnknown();
+      }
       if (left.typeName !== "bool") throw new Error(`Cannot apply '||' to type ${left.typeName}`);
       if (left.value) return mkBool(true);
-      return this.eval(node.right, scope, functions);
+      const right = this.eval(node.right, scope, functions);
+      if (isUnknown(right)) return mkUnknown();
+      return right;
     }
 
     const left = this.eval(node.left, scope, functions);
@@ -418,6 +470,7 @@ export class RulesEvaluator {
     functions: Map<string, FunctionDeclaration>,
   ): RulesValue {
     const test = this.eval(node.test, scope, functions);
+    if (isUnknown(test)) return mkUnknown();
     if (test.typeName !== "bool") throw new Error("Ternary condition must be bool");
     return test.value
       ? this.eval(node.consequent, scope, functions)
@@ -476,6 +529,7 @@ export class RulesEvaluator {
     functions: Map<string, FunctionDeclaration>,
   ): RulesValue {
     const value = this.eval(node.value, scope, functions);
+    if (isUnknown(value)) return mkUnknown();
     return mkBool(isTypeName(value, node.targetType));
   }
 }

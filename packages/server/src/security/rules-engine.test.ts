@@ -534,6 +534,227 @@ describe("SecurityRulesEngine", () => {
     });
   });
 
+  describe("evaluateListStatic (クエリ制約からの静的証明)", () => {
+    const visibilityRules: SecurityRules = {
+      rules: {
+        posts: { list: "resource.data.visibility == 'public'", get: true, write: true },
+      },
+    };
+
+    it("等値フィルタがルールを証明するなら許可する", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      const result = engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+        { type: "where", fieldPath: "visibility", op: "==", value: "public" },
+      ]);
+      expect(result.allowed).toBe(true);
+    });
+
+    it("制約がなければデータの中身に関係なく拒否する（ルールはフィルタではない）", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      const result = engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, []);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("statically proven");
+    });
+
+    it("ルールと矛盾する等値フィルタは拒否する", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      const result = engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+        { type: "where", fieldPath: "visibility", op: "==", value: "private" },
+      ]);
+      expect(result.allowed).toBe(false);
+    });
+
+    it("範囲フィルタは等値を証明しない", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      const result = engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+        { type: "where", fieldPath: "visibility", op: ">=", value: "public" },
+      ]);
+      expect(result.allowed).toBe(false);
+    });
+
+    it("否定形（!=）は制約なしでは証明できない", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "resource.data.hidden != true" } },
+      });
+      expect(engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, []).allowed).toBe(
+        false,
+      );
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "hidden", op: "==", value: false },
+        ]).allowed,
+      ).toBe(true);
+    });
+
+    it("|| の片側が具体値で true なら resource 参照側が不明でも許可する", () => {
+      const engine = new SecurityRulesEngine({
+        rules: {
+          posts: { list: "auth.uid == 'admin' || resource.data.owner == request.auth.uid" },
+        },
+      });
+      // admin は resource に関係なく許可
+      expect(
+        engine.evaluateListStatic({ auth: { uid: "admin" }, collectionPath: "posts" }, []).allowed,
+      ).toBe(true);
+      // 非 admin は owner 制約がなければ拒否
+      expect(
+        engine.evaluateListStatic({ auth: { uid: "u1" }, collectionPath: "posts" }, []).allowed,
+      ).toBe(false);
+      // owner == 自分 の等値フィルタで証明できる
+      expect(
+        engine.evaluateListStatic({ auth: { uid: "u1" }, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "owner", op: "==", value: "u1" },
+        ]).allowed,
+      ).toBe(true);
+    });
+
+    it("&& の片側が具体値で false なら不明を評価せず拒否する", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "auth != null && resource.data.v == 1" } },
+      });
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "v", op: "==", value: 1 },
+        ]).allowed,
+      ).toBe(false);
+    });
+
+    it("ドット記法のネストフィールドも証明できる", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "resource.data.meta.level == 1" } },
+      });
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "meta.level", op: "==", value: 1 },
+        ]).allowed,
+      ).toBe(true);
+      expect(engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, []).allowed).toBe(
+        false,
+      );
+    });
+
+    it("and 複合フィルタ内の等値も証明に使える", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          {
+            type: "and",
+            filters: [
+              { type: "where", fieldPath: "visibility", op: "==", value: "public" },
+              { type: "where", fieldPath: "n", op: ">", value: 0 },
+            ],
+          },
+        ]).allowed,
+      ).toBe(true);
+    });
+
+    it("or 複合フィルタは証明に使えない", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          {
+            type: "or",
+            filters: [
+              { type: "where", fieldPath: "visibility", op: "==", value: "public" },
+              { type: "where", fieldPath: "visibility", op: "==", value: "unlisted" },
+            ],
+          },
+        ]).allowed,
+      ).toBe(false);
+    });
+
+    it("documentId 参照は静的には証明できない", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "auth.uid == documentId" } },
+      });
+      expect(
+        engine.evaluateListStatic({ auth: { uid: "u1" }, collectionPath: "posts" }, []).allowed,
+      ).toBe(false);
+    });
+
+    it("in 演算子: 既知キーは true、未知キーは証明不能", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "'tag' in resource.data" } },
+      });
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "tag", op: "==", value: "x" },
+        ]).allowed,
+      ).toBe(true);
+      expect(engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, []).allowed).toBe(
+        false,
+      );
+    });
+
+    it("is 型チェックも等値制約から証明できる", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "resource.data.n is int" } },
+      });
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "n", op: "==", value: 5 },
+        ]).allowed,
+      ).toBe(true);
+      expect(engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, []).allowed).toBe(
+        false,
+      );
+    });
+
+    it("request.query.limit の証明は従来どおり動く", () => {
+      const engine = new SecurityRulesEngine({
+        rules: { posts: { list: "request.query.limit != null && request.query.limit <= 10" } },
+      });
+      expect(
+        engine.evaluateListStatic(
+          { auth: null, collectionPath: "posts", queryParams: { limit: 5 } },
+          [{ type: "limit", limit: 5 }],
+        ).allowed,
+      ).toBe(true);
+      expect(
+        engine.evaluateListStatic(
+          { auth: null, collectionPath: "posts", queryParams: { limit: 100 } },
+          [{ type: "limit", limit: 100 }],
+        ).allowed,
+      ).toBe(false);
+    });
+
+    it("boolean ルールはそのまま通る", () => {
+      const engine = new SecurityRulesEngine({ rules: { posts: { list: true } } });
+      expect(engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, []).allowed).toBe(
+        true,
+      );
+    });
+
+    it("カスタム関数を通じた resource 参照も静的証明の対象になる", () => {
+      const engine = new SecurityRulesEngine({
+        rules: {
+          posts: {
+            functions: "function isPublic() { return resource.data.visibility == 'public'; }",
+            list: "isPublic()",
+          },
+        },
+      });
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "visibility", op: "==", value: "public" },
+        ]).allowed,
+      ).toBe(true);
+      expect(engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, []).allowed).toBe(
+        false,
+      );
+    });
+
+    it("同一フィールドへの矛盾した等値制約は証明不能に倒す", () => {
+      const engine = new SecurityRulesEngine(visibilityRules);
+      expect(
+        engine.evaluateListStatic({ auth: null, collectionPath: "posts" }, [
+          { type: "where", fieldPath: "visibility", op: "==", value: "public" },
+          { type: "where", fieldPath: "visibility", op: "==", value: "private" },
+        ]).allowed,
+      ).toBe(false);
+    });
+  });
+
   describe("preset rules", () => {
     it("createOpenRules should allow everything", () => {
       const engine = new SecurityRulesEngine(createOpenRules());
