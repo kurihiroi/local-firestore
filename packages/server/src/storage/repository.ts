@@ -13,7 +13,7 @@ export class DocumentRepository {
     listAll: Database.Statement;
   };
 
-  constructor(db: Database.Database) {
+  constructor(private db: Database.Database) {
     this.stmts = {
       get: db.prepare("SELECT * FROM documents WHERE path = ?"),
       insert: db.prepare(`
@@ -89,6 +89,14 @@ export class DocumentRepository {
   listAll(): DocumentMetadata[] {
     const rows = this.stmts.listAll.all() as RawRow[];
     return rows.map(toMetadata);
+  }
+
+  /**
+   * 全ドキュメントを単一トランザクション内で読み取る（/export 用）。
+   * 実行中の書き込みと交錯しないスナップショット一貫性を明示的に保証する。
+   */
+  exportSnapshot(): DocumentMetadata[] {
+    return this.db.transaction(() => this.listAll())();
   }
 
   deleteAll(): number {

@@ -19,7 +19,7 @@ import { TriggerService } from "./services/trigger.js";
 import type { TtlPolicy } from "./services/ttl.js";
 import { matchesCollectionPattern, TtlService } from "./services/ttl.js";
 import { DocumentRepository } from "./storage/repository.js";
-import { createDatabase, DatabaseOpenError } from "./storage/sqlite.js";
+import { createDatabase, DatabaseOpenError, parseSynchronousMode } from "./storage/sqlite.js";
 import { createTlsServer, getTlsOptionsFromEnv } from "./tls.js";
 import { acquireProcessLock, ProcessLockError } from "./utils/process-lock.js";
 import { attachWebSocket } from "./websocket.js";
@@ -127,7 +127,10 @@ function runMigrate(args: string[]): void {
   const dbPath = process.env.DB_PATH || "local-firestore.db";
   const dryRun = args.includes("--dry-run");
 
-  const db = createDatabase(dbPath, { encryptionKey: process.env.DB_ENCRYPTION_KEY });
+  const db = createDatabase(dbPath, {
+    encryptionKey: process.env.DB_ENCRYPTION_KEY,
+    synchronous: parseSynchronousMode(process.env.DB_SYNCHRONOUS),
+  });
   const report = migrateDatabase(db, { dryRun });
   db.close();
 
@@ -181,9 +184,15 @@ async function main() {
     logger.info("At-rest encryption enabled (DB_ENCRYPTION_KEY)");
   }
 
+  // 耐久性設定（DB_SYNCHRONOUS=OFF|NORMAL|FULL|EXTRA。デフォルト NORMAL）
+  const synchronous = parseSynchronousMode(process.env.DB_SYNCHRONOUS);
+  if (synchronous && synchronous !== "NORMAL") {
+    logger.info("SQLite synchronous mode overridden", { synchronous });
+  }
+
   let db: ReturnType<typeof createDatabase>;
   try {
-    db = createDatabase(dbPath, { encryptionKey });
+    db = createDatabase(dbPath, { encryptionKey, synchronous });
   } catch (err) {
     if (err instanceof DatabaseOpenError) {
       logger.error(err.message);
@@ -209,7 +218,7 @@ async function main() {
 
   // マルチデータベース対応（/databases/:databaseId/* で独立した SQLite ファイルを使用。
   // 暗号化キーは全データベースで共通）
-  const databaseManager = new DatabaseManager(dbPath, { encryptionKey });
+  const databaseManager = new DatabaseManager(dbPath, { encryptionKey, synchronous });
 
   const app = createApp(db, listenerManager, {
     logger,
