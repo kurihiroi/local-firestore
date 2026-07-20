@@ -18,6 +18,11 @@ export interface SecurityRules {
   rules: CollectionRules;
   /** グローバルカスタム関数定義（式文字列） */
   functions?: string;
+  /**
+   * 全評価で束縛されるグローバル変数（firestore.rules の
+   * `/databases/{database}/documents` ラッパーの database 等）。
+   */
+  globalBindings?: Record<string, string>;
 }
 
 /** コレクション別のルール定義 */
@@ -45,6 +50,13 @@ export interface CollectionRule {
   subcollections?: CollectionRules;
   /** カスタム関数定義（式の前に付与される） */
   functions?: string;
+  /**
+   * ドキュメントレベルのワイルドカード変数名（firestore.rules の
+   * `match /users/{userId}` の userId）。評価時に documentId が束縛される。
+   * 再帰ワイルドカード（{name=**}）が最終セグメントの場合は、消費済み
+   * セグメントに documentId を連結したフルパスが束縛される。
+   */
+  documentWildcard?: string;
 }
 
 /** ルール評価に使うコンテキスト */
@@ -146,7 +158,22 @@ export class SecurityRulesEngine {
     }
 
     const matchedRule = match.rule;
-    const wildcardBindings = match.bindings;
+    const wildcardBindings: Record<string, string> = {
+      ...this.rules.globalBindings,
+      ...match.bindings,
+    };
+    const pathWildcards = new Set(match.pathBindings);
+
+    // ドキュメントレベルのワイルドカード（match /users/{userId} の userId）を束縛する
+    const docVar = matchedRule.documentWildcard;
+    if (docVar) {
+      if (wildcardBindings[docVar] !== undefined && pathWildcards.has(docVar)) {
+        // 再帰ワイルドカードが最終セグメント: 消費済みセグメント + documentId でフルパス
+        wildcardBindings[docVar] = `${wildcardBindings[docVar]}/${context.documentId}`;
+      } else {
+        wildcardBindings[docVar] = context.documentId;
+      }
+    }
 
     // 操作に対応するルールを取得（matchRules が操作定義済みルールのみ返すため必ず存在する）
     const ruleValue = this.resolveOperationRule(matchedRule, operation);
@@ -176,7 +203,7 @@ export class SecurityRulesEngine {
         requestTime: context.requestTime ?? new Date(),
         queryParams: context.queryParams,
         wildcardBindings,
-        pathWildcards: match.pathBindings,
+        pathWildcards,
         pendingWrites: context.pendingWrites,
       };
 

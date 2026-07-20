@@ -31,6 +31,7 @@ export {
   SecurityRulesEngine,
 } from "./security/rules-engine.js";
 export { securityRulesMiddleware } from "./security/rules-middleware.js";
+export { looksLikeRulesText, parseRulesText } from "./security/rules-text-parser.js";
 export type { DatabaseInstance } from "./services/database-manager.js";
 export {
   DatabaseManager,

@@ -9,6 +9,7 @@ import type { AuthProvider } from "./security/auth-provider.js";
 import { LocalAuthProvider } from "./security/auth-provider.js";
 import type { SecurityRules } from "./security/rules-engine.js";
 import { SecurityRulesEngine } from "./security/rules-engine.js";
+import { looksLikeRulesText, parseRulesText } from "./security/rules-text-parser.js";
 import { DatabaseManager } from "./services/database-manager.js";
 import { DocumentService } from "./services/document.js";
 import type { IndexValidationMode } from "./services/index-manager.js";
@@ -50,7 +51,14 @@ function createSecurityRulesEngine(
 
   let rules: SecurityRules;
   try {
-    rules = JSON.parse(readFileSync(rulesPath, "utf-8")) as SecurityRules;
+    const content = readFileSync(rulesPath, "utf-8");
+    // 本家 firestore.rules テキスト形式と独自 JSON 形式の両方を受け付ける
+    if (looksLikeRulesText(content)) {
+      rules = parseRulesText(content);
+      logger.info("Security rules loaded from firestore.rules text format", { rulesPath });
+    } else {
+      rules = JSON.parse(content) as SecurityRules;
+    }
   } catch (err) {
     throw new Error(`Failed to load security rules from ${rulesPath}: ${String(err)}`);
   }
