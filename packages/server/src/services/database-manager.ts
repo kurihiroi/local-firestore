@@ -3,7 +3,7 @@ import { DocumentRepository } from "../storage/repository.js";
 import type { CreateDatabaseOptions } from "../storage/sqlite.js";
 import { createDatabase } from "../storage/sqlite.js";
 import { DocumentService } from "./document.js";
-import { ListenerManager } from "./listener-manager.js";
+import { ListenerManager, type ListenerManagerOptions } from "./listener-manager.js";
 import { QueryService } from "./query.js";
 
 /** デフォルトデータベースのID（本家 Firestore と同じ表記） */
@@ -58,6 +58,7 @@ export class DatabaseManager {
   constructor(
     private basePath: string = ":memory:",
     private databaseOptions: CreateDatabaseOptions = {},
+    private listenerOptions: ListenerManagerOptions = {},
   ) {}
 
   /** デフォルトデータベースとして既存の DB / ListenerManager を登録する */
@@ -65,7 +66,8 @@ export class DatabaseManager {
     const instance: DatabaseInstance = {
       databaseId: DEFAULT_DATABASE_ID,
       db,
-      listenerManager: listenerManager ?? new ListenerManager(new QueryService(db)),
+      listenerManager:
+        listenerManager ?? new ListenerManager(new QueryService(db), this.listenerOptions),
       documentService: new DocumentService(new DocumentRepository(db)),
     };
     this.instances.set(DEFAULT_DATABASE_ID, instance);
@@ -84,7 +86,7 @@ export class DatabaseManager {
     const instance: DatabaseInstance = {
       databaseId,
       db,
-      listenerManager: new ListenerManager(new QueryService(db)),
+      listenerManager: new ListenerManager(new QueryService(db), this.listenerOptions),
       documentService: new DocumentService(new DocumentRepository(db)),
     };
     this.instances.set(databaseId, instance);

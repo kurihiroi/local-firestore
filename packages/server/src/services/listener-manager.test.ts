@@ -27,6 +27,50 @@ function setupTestEnv() {
 }
 
 describe("ListenerManager", () => {
+  describe("バックプレッシャ（送信バッファ上限）", () => {
+    it("bufferedAmount が上限を超えた遅い接続は切断され送信されない", () => {
+      const db = createDatabase(":memory:");
+      const repo = new DocumentRepository(db);
+      const docService = new DocumentService(repo);
+      const manager = new ListenerManager(new QueryService(db), { maxBufferedBytes: 100 });
+      docService.setDocument("users/alice", { name: "Alice" });
+
+      const slowWs = {
+        readyState: 1,
+        send: vi.fn(),
+        close: vi.fn(),
+        terminate: vi.fn(),
+        bufferedAmount: 1000,
+      } as unknown as import("ws").WebSocket;
+
+      manager.subscribeDoc(slowWs, "sub1", "users/alice", (path) => docService.getDocument(path));
+
+      expect(slowWs.terminate).toHaveBeenCalled();
+      expect(slowWs.send).not.toHaveBeenCalled();
+    });
+
+    it("バッファが上限以下なら通常どおり送信される", () => {
+      const db = createDatabase(":memory:");
+      const repo = new DocumentRepository(db);
+      const docService = new DocumentService(repo);
+      const manager = new ListenerManager(new QueryService(db), { maxBufferedBytes: 100 });
+      docService.setDocument("users/alice", { name: "Alice" });
+
+      const ws = {
+        readyState: 1,
+        send: vi.fn(),
+        close: vi.fn(),
+        terminate: vi.fn(),
+        bufferedAmount: 0,
+      } as unknown as import("ws").WebSocket;
+
+      manager.subscribeDoc(ws, "sub1", "users/alice", (path) => docService.getDocument(path));
+
+      expect(ws.terminate).not.toHaveBeenCalled();
+      expect(ws.send).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("ドキュメントリスナー", () => {
     it("登録時に初回スナップショットが送信される", () => {
       const { manager, docService, getDoc } = setupTestEnv();

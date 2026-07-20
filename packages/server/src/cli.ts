@@ -118,6 +118,17 @@ function startTtlService(
   return ttlService;
 }
 
+/** 非負整数の環境変数をパースする（未指定は undefined、不正値はエラー） */
+function envNonNegativeInt(name: string): number | undefined {
+  const value = process.env[name];
+  if (value === undefined || value === "") return undefined;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`Invalid ${name}: "${value}". Must be a non-negative integer.`);
+  }
+  return n;
+}
+
 /**
  * migrate サブコマンド: SQLite ファイル内の旧形式データを現行形式へ変換する。
  *
@@ -203,7 +214,10 @@ async function main() {
   const repo = new DocumentRepository(db);
   const documentService = new DocumentService(repo);
   const queryService = new QueryService(db);
-  const listenerManager = new ListenerManager(queryService);
+
+  // 過負荷防御の設定（WS_* / MAX_REQUEST_BODY_BYTES。未指定はデフォルト値）
+  const listenerOptions = { maxBufferedBytes: envNonNegativeInt("WS_MAX_BUFFERED_BYTES") };
+  const listenerManager = new ListenerManager(queryService, listenerOptions);
 
   const authProvider = await createAuthProvider(logger);
 
@@ -218,7 +232,11 @@ async function main() {
 
   // マルチデータベース対応（/databases/:databaseId/* で独立した SQLite ファイルを使用。
   // 暗号化キーは全データベースで共通）
-  const databaseManager = new DatabaseManager(dbPath, { encryptionKey, synchronous });
+  const databaseManager = new DatabaseManager(
+    dbPath,
+    { encryptionKey, synchronous },
+    listenerOptions,
+  );
 
   const app = createApp(db, listenerManager, {
     logger,
@@ -227,6 +245,7 @@ async function main() {
     triggerService,
     indexManager,
     databaseManager,
+    maxRequestBodyBytes: envNonNegativeInt("MAX_REQUEST_BODY_BYTES"),
   });
 
   // TTL による期限切れドキュメントの自動削除（TTL_POLICIES 指定時のみ有効）
@@ -246,19 +265,27 @@ async function main() {
     }) as Server;
   }
 
-  attachWebSocket(server, {
-    listenerManager,
-    getDocument: (path) => documentService.getDocument(path),
-    securityRules,
-    authProvider,
-    resolveDatabase: (databaseId) => {
-      const instance = databaseManager.get(databaseId);
-      return {
-        listenerManager: instance.listenerManager,
-        getDocument: (path) => instance.documentService.getDocument(path),
-      };
+  attachWebSocket(
+    server,
+    {
+      listenerManager,
+      getDocument: (path) => documentService.getDocument(path),
+      securityRules,
+      authProvider,
+      resolveDatabase: (databaseId) => {
+        const instance = databaseManager.get(databaseId);
+        return {
+          listenerManager: instance.listenerManager,
+          getDocument: (path) => instance.documentService.getDocument(path),
+        };
+      },
     },
-  });
+    {
+      maxConnections: envNonNegativeInt("WS_MAX_CONNECTIONS"),
+      maxPayloadBytes: envNonNegativeInt("WS_MAX_PAYLOAD_BYTES"),
+      heartbeatIntervalMs: envNonNegativeInt("WS_HEARTBEAT_INTERVAL_MS"),
+    },
+  );
 }
 
 const subcommand = process.argv[2];

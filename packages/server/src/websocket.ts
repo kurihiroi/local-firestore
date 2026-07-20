@@ -6,6 +6,7 @@ import type {
   SubscribeDocMessage,
   SubscribeQueryMessage,
 } from "@local-firestore/shared";
+import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 import type { AuthProvider } from "./security/auth-provider.js";
 import { extractQueryParams, type SecurityRulesEngine } from "./security/rules-engine.js";
@@ -120,13 +121,67 @@ async function prepareQuerySubscription(
   };
 }
 
+/** WebSocket の過負荷防御設定 */
+export interface WebSocketLimits {
+  /** 同時接続数の上限（超過時は 1013 Try Again Later でクローズ）。0 で無制限（`WS_MAX_CONNECTIONS`） */
+  maxConnections?: number;
+  /** 受信メッセージの最大バイト数（`WS_MAX_PAYLOAD_BYTES`。超過時は ws が 1009 でクローズ） */
+  maxPayloadBytes?: number;
+  /** ping/pong 死活監視の間隔ミリ秒。応答のない接続は切断。0 で無効（`WS_HEARTBEAT_INTERVAL_MS`） */
+  heartbeatIntervalMs?: number;
+}
+
+const DEFAULT_MAX_CONNECTIONS = 1000;
+const DEFAULT_MAX_PAYLOAD_BYTES = 1_048_576; // 1 MiB（サブスクライブメッセージには十分）
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+
 /**
  * HTTPサーバーにWebSocketサーバーをアタッチする
  */
-export function attachWebSocket(server: HttpServer, deps: WebSocketDeps): WebSocketServer {
-  const wss = new WebSocketServer({ server });
+export function attachWebSocket(
+  server: HttpServer,
+  deps: WebSocketDeps,
+  limits: WebSocketLimits = {},
+): WebSocketServer {
+  const maxConnections = limits.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
+  const heartbeatIntervalMs = limits.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const wss = new WebSocketServer({
+    server,
+    maxPayload: limits.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
+  });
+
+  // ping/pong 死活監視: 前回の ping に応答していない接続を切断する
+  const alive = new WeakMap<WebSocket, boolean>();
+  if (heartbeatIntervalMs > 0) {
+    const heartbeat = setInterval(() => {
+      for (const client of wss.clients) {
+        if (alive.get(client) === false) {
+          client.terminate();
+          continue;
+        }
+        alive.set(client, false);
+        client.ping();
+      }
+    }, heartbeatIntervalMs);
+    heartbeat.unref?.();
+    wss.on("close", () => clearInterval(heartbeat));
+  }
 
   wss.on("connection", (ws) => {
+    // 接続数上限（この接続を含めて判定）
+    if (maxConnections > 0 && wss.clients.size > maxConnections) {
+      ws.close(1013, "Too many connections");
+      return;
+    }
+    alive.set(ws, true);
+    ws.on("pong", () => alive.set(ws, true));
+
+    // maxPayload 超過などのプロトコルエラー。未処理だと 'error' イベントで
+    // プロセスが落ちるため、ログに留める（接続は ws が自動的にクローズする）
+    ws.on("error", (err) => {
+      console.error("WebSocket connection error:", err.message);
+    });
+
     // この接続がサブスクリプションを登録した ListenerManager（切断時のクリーンアップ用）
     const usedManagers = new Set<ListenerManager>([deps.listenerManager]);
 

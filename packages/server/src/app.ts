@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { type Logger, requestLogger } from "./middleware/logger.js";
 import { MetricsCollector, metricsMiddleware } from "./middleware/metrics.js";
@@ -32,7 +33,15 @@ export interface AppOptions {
   indexManager?: IndexManager;
   /** マルチデータベース対応（/databases/:databaseId/* ルーティングを有効化） */
   databaseManager?: DatabaseManager;
+  /**
+   * リクエストボディの最大バイト数（`MAX_REQUEST_BODY_BYTES`）。
+   * 超過時は 413 を返す。デフォルト 10 MiB、0 で無効。
+   */
+  maxRequestBodyBytes?: number;
 }
+
+/** リクエストボディ上限のデフォルト（10 MiB。バッチ書き込みを考慮した本家 commit 相当） */
+const DEFAULT_MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
 
 export function createApp(
   db: Database.Database,
@@ -119,6 +128,25 @@ function buildDatabaseApp(
 
   // CORS
   app.use("*", cors());
+
+  // リクエストボディサイズ上限（過負荷防御）
+  const maxBodyBytes = options?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
+  if (maxBodyBytes > 0) {
+    app.use(
+      "*",
+      bodyLimit({
+        maxSize: maxBodyBytes,
+        onError: (c) =>
+          c.json(
+            {
+              code: "invalid-argument",
+              message: `Request body exceeds the maximum of ${maxBodyBytes} bytes`,
+            },
+            413,
+          ),
+      }),
+    );
+  }
 
   // セキュリティルール
   if (options?.securityRules && options?.authProvider) {

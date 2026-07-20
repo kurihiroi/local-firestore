@@ -41,14 +41,44 @@ interface QuerySubscription {
 
 type Subscription = DocSubscription | QuerySubscription;
 
+/** 送信バッファ上限のデフォルト（16 MiB） */
+const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
+
+export interface ListenerManagerOptions {
+  /**
+   * 送信バッファ（ws.bufferedAmount）の上限バイト数。超過した遅い接続は
+   * 切断され、メモリの積み上がりを防ぐ（`WS_MAX_BUFFERED_BYTES`）。0 で無効。
+   */
+  maxBufferedBytes?: number;
+}
+
 /**
  * アクティブなリスナーを管理し、ドキュメント変更時にスナップショットを配信する
  */
 export class ListenerManager {
   private subscriptions = new Map<string, Subscription>();
   private wsSubs = new Map<WebSocket, Set<string>>();
+  private maxBufferedBytes: number;
 
-  constructor(private queryService: QueryService) {}
+  constructor(
+    private queryService: QueryService,
+    options: ListenerManagerOptions = {},
+  ) {
+    this.maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
+  }
+
+  /**
+   * バックプレッシャ検査。送信バッファが上限を超えた遅い接続は切断して
+   * false を返す（購読のクリーンアップは close イベント経由の
+   * removeConnection に任せる）。
+   */
+  private ensureWritable(ws: WebSocket): boolean {
+    if (this.maxBufferedBytes > 0 && (ws.bufferedAmount ?? 0) > this.maxBufferedBytes) {
+      ws.terminate();
+      return false;
+    }
+    return true;
+  }
 
   /** ドキュメントリスナーを登録し、初回スナップショットを送信する */
   subscribeDoc(
@@ -311,6 +341,7 @@ export class ListenerManager {
     path: string,
     doc: DocumentMetadata | undefined,
   ): void {
+    if (!this.ensureWritable(ws)) return;
     ws.send(
       JSON.stringify({
         type: "doc_snapshot",
@@ -326,6 +357,7 @@ export class ListenerManager {
 
   private sendPermissionDenied(ws: WebSocket, subscriptionId: string, message: string): void {
     if (ws.readyState !== 1 /* WebSocket.OPEN */) return;
+    if (!this.ensureWritable(ws)) return;
     ws.send(
       JSON.stringify({
         type: "error",
@@ -342,6 +374,7 @@ export class ListenerManager {
     docs: QueryDocumentData[],
     changes: DocumentChangeData[],
   ): void {
+    if (!this.ensureWritable(ws)) return;
     ws.send(
       JSON.stringify({
         type: "query_snapshot",
