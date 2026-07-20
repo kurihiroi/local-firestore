@@ -17,12 +17,31 @@ interface FirebaseAuth {
   verifyIdToken(idToken: string): Promise<DecodedIdToken>;
 }
 
+/** FirebaseAuthProvider のオプション */
+export interface FirebaseAuthProviderOptions {
+  /**
+   * トークン検証失敗時に呼ばれるフック（ログ / メトリクス用）。
+   * 未指定時は console.error へ出力する。
+   */
+  onVerificationFailure?: (message: string) => void;
+}
+
 /**
  * Firebase Auth 認証プロバイダー
  * Firebase Admin SDK を使って ID トークン（JWT）を検証する
  */
 export class FirebaseAuthProvider implements AuthProvider {
-  constructor(private auth: FirebaseAuth) {}
+  private failures = 0;
+
+  constructor(
+    private auth: FirebaseAuth,
+    private options: FirebaseAuthProviderOptions = {},
+  ) {}
+
+  /** トークン検証失敗の累計（メトリクス / 監視用） */
+  get verificationFailureCount(): number {
+    return this.failures;
+  }
 
   async extractAuth(authHeader: string | undefined): Promise<AuthContext | null> {
     if (!authHeader) return null;
@@ -37,7 +56,19 @@ export class FirebaseAuthProvider implements AuthProvider {
         uid: decoded.uid,
         token: decoded as Record<string, unknown>,
       };
-    } catch {
+    } catch (err) {
+      // トークンが「無い」のではなく「検証に失敗した」ケース。
+      // 静かに匿名へ落とすと認証系の障害（鍵ローテーション失敗・
+      // プロジェクト設定ミス等）が見えなくなるため、必ず可視化する
+      this.failures++;
+      const message = `Firebase ID token verification failed (falling back to anonymous): ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+      if (this.options.onVerificationFailure) {
+        this.options.onVerificationFailure(message);
+      } else {
+        console.error(message);
+      }
       return null;
     }
   }

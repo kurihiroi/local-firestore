@@ -67,6 +67,16 @@ export class ListenerManager {
     this.maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
   }
 
+  /** アクティブな購読数（メトリクス用） */
+  get subscriptionCount(): number {
+    return this.subscriptions.size;
+  }
+
+  /** 購読を持つ WebSocket 接続数（メトリクス用） */
+  get connectionCount(): number {
+    return this.wsSubs.size;
+  }
+
   /**
    * バックプレッシャ検査。送信バッファが上限を超えた遅い接続は切断して
    * false を返す（購読のクリーンアップは close イベント経由の
