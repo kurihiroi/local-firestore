@@ -109,6 +109,8 @@ const WILDCARD_PATTERN = /^\{(\w+)(=\*\*)?\}$/;
 interface RuleMatch {
   rule: CollectionRule;
   bindings: Record<string, string>;
+  /** 再帰ワイルドカード（{name=**}）で束縛された変数名（本家では path 型） */
+  pathBindings: ReadonlySet<string>;
 }
 
 /**
@@ -134,7 +136,7 @@ export class SecurityRulesEngine {
    */
   evaluate(operation: Operation, context: RuleContext): RuleEvaluationResult {
     const segments = context.collectionPath.split("/");
-    const match = this.matchRules(this.rules.rules, segments, 0, {}, operation);
+    const match = this.matchRules(this.rules.rules, segments, 0, {}, new Set(), operation);
 
     if (!match) {
       return {
@@ -174,6 +176,7 @@ export class SecurityRulesEngine {
         requestTime: context.requestTime ?? new Date(),
         queryParams: context.queryParams,
         wildcardBindings,
+        pathWildcards: match.pathBindings,
         pendingWrites: context.pendingWrites,
       };
 
@@ -264,7 +267,7 @@ export class SecurityRulesEngine {
     if (collectionGroup) return true;
 
     const segments = collectionPath.split("/");
-    const match = this.matchRules(this.rules.rules, segments, 0, {}, "list");
+    const match = this.matchRules(this.rules.rules, segments, 0, {}, new Set(), "list");
     if (!match) return false;
 
     const ruleValue = this.resolveOperationRule(match.rule, "list");
@@ -300,6 +303,7 @@ export class SecurityRulesEngine {
     segments: string[],
     start: number,
     bindings: Record<string, string>,
+    pathVars: ReadonlySet<string>,
     operation: Operation,
   ): RuleMatch | undefined {
     if (start >= segments.length) return undefined;
@@ -310,18 +314,26 @@ export class SecurityRulesEngine {
       rule: CollectionRule,
       nextStart: number,
       newBindings: Record<string, string>,
+      newPathVars: ReadonlySet<string>,
     ): RuleMatch | undefined => {
       if (nextStart >= segments.length) {
         if (this.resolveOperationRule(rule, operation) === undefined) return undefined;
-        return { rule, bindings: newBindings };
+        return { rule, bindings: newBindings, pathBindings: newPathVars };
       }
       if (!rule.subcollections) return undefined;
-      return this.matchRules(rule.subcollections, segments, nextStart, newBindings, operation);
+      return this.matchRules(
+        rule.subcollections,
+        segments,
+        nextStart,
+        newBindings,
+        newPathVars,
+        operation,
+      );
     };
 
     // 1. 完全一致
     if (rules[segment]) {
-      const result = tryDescend(rules[segment], start + 1, bindings);
+      const result = tryDescend(rules[segment], start + 1, bindings, pathVars);
       if (result) return result;
     }
 
@@ -329,7 +341,7 @@ export class SecurityRulesEngine {
     for (const [pattern, rule] of Object.entries(rules)) {
       const match = WILDCARD_PATTERN.exec(pattern);
       if (match && !match[2]) {
-        const result = tryDescend(rule, start + 1, { ...bindings, [match[1]]: segment });
+        const result = tryDescend(rule, start + 1, { ...bindings, [match[1]]: segment }, pathVars);
         if (result) return result;
       }
     }
@@ -343,7 +355,12 @@ export class SecurityRulesEngine {
         const remaining = segments.length - start;
         for (let consume = remaining; consume >= 0; consume--) {
           const bound = segments.slice(start, start + consume).join("/");
-          const result = tryDescend(rule, start + consume, { ...bindings, [varName]: bound });
+          const result = tryDescend(
+            rule,
+            start + consume,
+            { ...bindings, [varName]: bound },
+            new Set([...pathVars, varName]),
+          );
           if (result) return result;
         }
       }

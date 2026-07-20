@@ -328,7 +328,7 @@ export function securityRulesMiddleware(
       return next();
     }
 
-    const operation = resolveOperation(method, docPath);
+    let operation = resolveOperation(method, docPath);
     if (!operation) {
       return next();
     }
@@ -350,6 +350,16 @@ export function securityRulesMiddleware(
     ) {
       const existing = documentService.getDocument(docPath);
       existingData = existing?.data;
+    }
+
+    // PUT（上書き set）は既存ドキュメントの有無で create / update を切り替える
+    // （本家と同じ扱い。batch / transaction の set は切替済みだった）
+    if (method === "PUT" && operation === "create" && documentService && isDocumentPath(docPath)) {
+      const existing = documentService.getDocument(docPath);
+      if (existing) {
+        operation = "update";
+        existingData = existing.data;
+      }
     }
 
     // 単一書き込みでも getAfter() / existsAfter() が使えるよう書き込み後状態を束縛する

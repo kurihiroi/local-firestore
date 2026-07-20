@@ -332,7 +332,11 @@ export class Parser {
         return { type: "NullLiteral" };
       case "Number": {
         this.advance();
-        const isFloat = token.value.includes(".");
+        // 16進リテラルは int、指数部付きは float（CEL 準拠）
+        if (/^0[xX]/.test(token.value)) {
+          return { type: "IntLiteral", value: parseInt(token.value, 16) };
+        }
+        const isFloat = token.value.includes(".") || /[eE]/.test(token.value);
         return isFloat
           ? { type: "FloatLiteral", value: parseFloat(token.value) }
           : { type: "IntLiteral", value: parseInt(token.value, 10) };

@@ -623,4 +623,21 @@ describe("securityRulesMiddleware", () => {
       expect(res.status).toBe(200);
     });
   });
+
+  describe("PUT の create / update 切替（本家互換）", () => {
+    it("既存ドキュメントへの PUT は update ルールで評価される", async () => {
+      const engine = new SecurityRulesEngine({
+        rules: { notes: { read: true, create: true, update: false } },
+      });
+      const app = createTestAppWithRules(engine);
+
+      // 新規作成は create ルールで許可
+      const first = await request(app, "PUT", "/docs/notes/n1", { body: { data: { v: 1 } } });
+      expect(first.status).toBe(200);
+
+      // 既存ドキュメントへの上書き set は update ルールで拒否
+      const second = await request(app, "PUT", "/docs/notes/n1", { body: { data: { v: 2 } } });
+      expect(second.status).toBe(403);
+    });
+  });
 });

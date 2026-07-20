@@ -167,8 +167,28 @@ export class Lexer {
     return this.isIdentStart(ch) || this.isDigit(ch);
   }
 
+  private isHexDigit(ch: string): boolean {
+    return this.isDigit(ch) || (ch >= "a" && ch <= "f") || (ch >= "A" && ch <= "F");
+  }
+
   private readNumber(): void {
     const start = this.pos;
+
+    // 16進リテラル（0xFF。CEL で許容される）
+    if (
+      this.input[this.pos] === "0" &&
+      (this.input[this.pos + 1] === "x" || this.input[this.pos + 1] === "X") &&
+      this.pos + 2 < this.input.length &&
+      this.isHexDigit(this.input[this.pos + 2])
+    ) {
+      this.pos += 2;
+      while (this.pos < this.input.length && this.isHexDigit(this.input[this.pos])) {
+        this.pos++;
+      }
+      this.tokens.push({ type: "Number", value: this.input.slice(start, this.pos), pos: start });
+      return;
+    }
+
     while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
       this.pos++;
     }
@@ -182,6 +202,22 @@ export class Lexer {
       this.pos++;
       while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
         this.pos++;
+      }
+    }
+    // 指数部（1e3 / 2.5e-2。CEL で許容される）
+    if (
+      this.pos < this.input.length &&
+      (this.input[this.pos] === "e" || this.input[this.pos] === "E")
+    ) {
+      let p = this.pos + 1;
+      if (p < this.input.length && (this.input[p] === "+" || this.input[p] === "-")) {
+        p++;
+      }
+      if (p < this.input.length && this.isDigit(this.input[p])) {
+        this.pos = p;
+        while (this.pos < this.input.length && this.isDigit(this.input[this.pos])) {
+          this.pos++;
+        }
       }
     }
     this.tokens.push({

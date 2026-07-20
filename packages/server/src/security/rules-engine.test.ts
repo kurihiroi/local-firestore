@@ -303,12 +303,27 @@ describe("SecurityRulesEngine", () => {
       expect(result.allowed).toBe(true);
     });
 
+    it("単一ワイルドカード（{name}）は string 型で束縛される", () => {
+      const stringEngine = new SecurityRulesEngine({
+        rules: {
+          "{coll}": { read: "coll is string && coll == 'users'" },
+        },
+      });
+      expect(
+        stringEngine.evaluate(
+          "get",
+          makeContext({ path: "users/u1", collectionPath: "users", documentId: "u1" }),
+        ).allowed,
+      ).toBe(true);
+    });
+
     it("should bind consumed segments to the wildcard variable", () => {
+      // {name=**} は本家同様 path 型で束縛される（string との == は false になる）
       const bindingEngine = new SecurityRulesEngine({
         rules: {
           "{path=**}": {
             subcollections: {
-              comments: { read: "path == 'posts/p1'" },
+              comments: { read: "path is path && string(path) == 'posts/p1'" },
             },
           },
         },

@@ -3,6 +3,7 @@ import type { AuthContext, Operation } from "../rules-engine.js";
 import type { PendingWrites } from "./builtin-functions.js";
 import { documentDataToRulesMap } from "./special-types.js";
 import {
+  mkBool,
   mkInt,
   mkMap,
   mkNull,
@@ -29,6 +30,8 @@ export interface EvaluationContext {
   queryParams?: QueryParams;
   /** ワイルドカードにバインドされた変数 */
   wildcardBindings: Record<string, string>;
+  /** 再帰ワイルドカード（{name=**}）で束縛された変数名（path 型で束縛する） */
+  pathWildcards?: ReadonlySet<string>;
   /** 評価中の書き込みの「書き込み後の状態」（getAfter / existsAfter 用） */
   pendingWrites?: PendingWrites;
 }
@@ -52,8 +55,9 @@ export function buildGlobalScope(ctx: EvaluationContext): Map<string, RulesValue
   scope.set("resource", buildResourceObject(ctx));
 
   // ワイルドカード変数のバインディング
+  // （{name=**} は本家同様 path 型、{name} は string 型で束縛する）
   for (const [name, value] of Object.entries(ctx.wildcardBindings)) {
-    scope.set(name, mkString(value));
+    scope.set(name, ctx.pathWildcards?.has(name) ? mkPath(value) : mkString(value));
   }
 
   // documentId (後方互換)
@@ -138,20 +142,52 @@ function buildAuthObject(auth: AuthContext): RulesMap {
   map.set("uid", mkString(auth.uid));
 
   // auth.token（カスタムクレーム含む）
+  let tokenMap: Map<string, RulesValue>;
   if (auth.token && typeof auth.token === "object") {
-    map.set("token", toRulesValue(auth.token));
+    const converted = toRulesValue(auth.token);
+    tokenMap = converted.typeName === "map" ? new Map(converted.value) : new Map();
   } else {
     // uid以外のプロパティをtokenとして扱う
-    const tokenMap = new Map<string, RulesValue>();
+    tokenMap = new Map<string, RulesValue>();
     for (const [key, value] of Object.entries(auth)) {
       if (key !== "uid") {
         tokenMap.set(key, toRulesValue(value));
       }
     }
-    if (tokenMap.size > 0) {
-      map.set("token", mkMap(tokenMap));
-    }
   }
+  map.set("token", mkMap(withStandardClaims(tokenMap)));
 
   return mkMap(map);
+}
+
+/**
+ * 本家が自動付与する標準クレームを補完する。
+ *
+ * AuthProvider が明示的に含めない限り firebase.sign_in_provider 等が
+ * 未定義参照 throw → 拒否になるのを防ぐ（本家では常に存在する）。
+ */
+function withStandardClaims(tokenMap: Map<string, RulesValue>): Map<string, RulesValue> {
+  const result = new Map(tokenMap);
+  const firebase = result.get("firebase");
+  if (firebase === undefined || firebase.typeName !== "map") {
+    result.set(
+      "firebase",
+      mkMap(
+        new Map<string, RulesValue>([
+          ["sign_in_provider", mkString("custom")],
+          ["identities", mkMap(new Map())],
+        ]),
+      ),
+    );
+  } else {
+    const fb = new Map(firebase.value);
+    if (!fb.has("sign_in_provider")) fb.set("sign_in_provider", mkString("custom"));
+    if (!fb.has("identities")) fb.set("identities", mkMap(new Map()));
+    result.set("firebase", mkMap(fb));
+  }
+  // email があるのに email_verified がない場合は本家同様 false を補完する
+  if (result.has("email") && !result.has("email_verified")) {
+    result.set("email_verified", mkBool(false));
+  }
+  return result;
 }

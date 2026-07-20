@@ -150,6 +150,84 @@ describe("RulesEvaluator", () => {
     });
   });
 
+  describe("数値リテラル（CEL 準拠）", () => {
+    it("16進リテラルをパースできる", () => {
+      const evaluator = createEvaluator();
+      expect(evaluator.evaluateExpression("0xFF == 255", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("0x10 + 1 == 17", makeEvalContext())).toBe(true);
+    });
+
+    it("指数表記をパースできる（float 扱い）", () => {
+      const evaluator = createEvaluator();
+      expect(evaluator.evaluateExpression("1e3 == 1000.0", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("2.5e-1 == 0.25", makeEvalContext())).toBe(true);
+      expect(evaluator.evaluateExpression("1E2 == 100.0", makeEvalContext())).toBe(true);
+    });
+  });
+
+  describe("timestamp.time()", () => {
+    it("0 時からの経過を duration で返す", () => {
+      const evaluator = createEvaluator();
+      // 1970-01-01T01:02:03Z = epoch 3723000ms
+      expect(
+        evaluator.evaluateExpression(
+          "timestamp.value(3723000).time() == duration.time(1, 2, 3, 0)",
+          makeEvalContext(),
+        ),
+      ).toBe(true);
+      expect(
+        evaluator.evaluateExpression(
+          "timestamp.value(3723000).time().hours() == 1",
+          makeEvalContext(),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("標準クレームの自動補完", () => {
+    it("firebase.sign_in_provider / identities が常に参照できる", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "request.auth.token.firebase.sign_in_provider == 'custom'",
+          makeEvalContext({ auth: { uid: "u1" } }),
+        ),
+      ).toBe(true);
+      expect(
+        evaluator.evaluateExpression(
+          "request.auth.token.firebase.identities.size() == 0",
+          makeEvalContext({ auth: { uid: "u1", token: { role: "admin" } } }),
+        ),
+      ).toBe(true);
+      // カスタムクレームはそのまま参照できる
+      expect(
+        evaluator.evaluateExpression(
+          "request.auth.token.role == 'admin'",
+          makeEvalContext({ auth: { uid: "u1", token: { role: "admin" } } }),
+        ),
+      ).toBe(true);
+    });
+
+    it("email があるのに email_verified がない場合は false を補完する", () => {
+      const evaluator = createEvaluator();
+      expect(
+        evaluator.evaluateExpression(
+          "request.auth.token.email_verified == false",
+          makeEvalContext({ auth: { uid: "u1", token: { email: "a@example.com" } } }),
+        ),
+      ).toBe(true);
+      // 明示指定は上書きしない
+      expect(
+        evaluator.evaluateExpression(
+          "request.auth.token.email_verified == true",
+          makeEvalContext({
+            auth: { uid: "u1", token: { email: "a@example.com", email_verified: true } },
+          }),
+        ),
+      ).toBe(true);
+    });
+  });
+
   describe("string methods", () => {
     it("should evaluate string.size()", () => {
       const evaluator = createEvaluator();

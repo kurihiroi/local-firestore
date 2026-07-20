@@ -1,4 +1,4 @@
-import { mkInt, mkTimestamp, type RulesValue } from "./types.js";
+import { mkDuration, mkInt, mkTimestamp, type RulesValue } from "./types.js";
 
 /**
  * Timestamp 型のメソッドをディスパッチする
@@ -36,6 +36,14 @@ export function callTimestampMethod(date: Date, method: string, args: RulesValue
       return mkTimestamp(
         new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())),
       );
+    case "time": {
+      // time() は 0 時からの経過を duration で返す（本家互換）
+      const nanosSinceMidnight =
+        ((date.getUTCHours() * 60 + date.getUTCMinutes()) * 60 + date.getUTCSeconds()) *
+          1_000_000_000 +
+        date.getUTCMilliseconds() * 1_000_000;
+      return mkDuration(nanosSinceMidnight);
+    }
     default:
       throw new Error(`Unknown timestamp method: ${method}`);
   }

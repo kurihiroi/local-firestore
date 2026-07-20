@@ -508,5 +508,6 @@ function castToString(val: RulesValue): RulesValue {
   if (val.typeName === "int" || val.typeName === "float") return mkString(String(val.value));
   if (val.typeName === "bool") return mkString(String(val.value));
   if (val.typeName === "null") return mkString("null");
+  if (val.typeName === "path") return mkString(val.value);
   throw new Error(`Cannot convert ${val.typeName} to string`);
 }
