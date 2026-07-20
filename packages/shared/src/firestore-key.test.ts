@@ -120,6 +120,32 @@ describe("firestore-key", () => {
       expect(valueKey("a\u0000") < valueKey("a\u0001")).toBe(true);
       expect(valueKey("a\u0001") < valueKey("ab")).toBe(true);
     });
+
+    it("サロゲートペア（U+10000 以上）は UTF-8 バイト順で BMP 文字より後になる", () => {
+      // JS の生比較（UTF-16 コード単位順）ではサロゲート（0xD800〜）が
+      // U+E000〜U+FFFF より手前に来てしまう（本家と逆順）
+      expect("\u{1F600}" < "\uE000").toBe(true);
+      // 本家の UTF-8 バイト順ではコードポイント順になる
+      expect(valueKey("\uE000") < valueKey("\u{1F600}")).toBe(true);
+      expect(valueKey("\uFFFF") < valueKey("\u{10000}")).toBe(true);
+    });
+
+    it("コードポイント順の全域ソートを保存する", () => {
+      // ASCII → latin1 → ひらがな → 私用領域 → BMP 末尾 → 絵文字（astral）
+      const strings = [
+        "A",
+        "a",
+        "\u00A2",
+        "あ",
+        "ん",
+        "\uE000",
+        "\uFFFD",
+        "\u{1F600}",
+        "\u{1F680}",
+      ];
+      const keys = strings.map(valueKey);
+      expect([...keys].sort()).toEqual(keys);
+    });
   });
 
   describe("valueKey - 配列", () => {
@@ -140,6 +166,16 @@ describe("firestore-key", () => {
 
     it("キーの挿入順に依存しない", () => {
       expect(valueKey({ a: 1, b: 2 })).toBe(valueKey({ b: 2, a: 1 }));
+    });
+
+    it("マップキーは UTF-8 バイト順で比較される", () => {
+      // "\uE000" < "\u{1F600}"（UTF-8 順）なので最初の差分キーは "\uE000" の値。
+      // UTF-16 順で誤ソートすると "\u{1F600}" の値（0 vs 1）で比較され結果が反転する
+      const a = { "\uE000": 9, "\u{1F600}": 0 };
+      const b = { "\uE000": 8, "\u{1F600}": 1 };
+      expect(valueKey(b) < valueKey(a)).toBe(true);
+      // 挿入順にも依存しない
+      expect(valueKey({ "\u{1F600}": 0, "\uE000": 9 })).toBe(valueKey(a));
     });
   });
 
@@ -208,11 +244,11 @@ describe("firestore-key", () => {
     });
   });
 
-  describe("エンコード互換性（Buffer 実装からの移行）", () => {
-    // packages/server/src/storage/firestore-key.ts（Buffer ベースの旧実装）の
-    // 出力を固定値として採取したもの。shared への移動（DataView / atob 化）で
-    // キーが変わるとインデックス済みデータとの比較が壊れるため固定する。
-    it("encodeNumber の出力が旧実装と一致する", () => {
+  describe("エンコード出力の固定値", () => {
+    // キーは実行時計算のみで永続化されないが、リグレッション検出のため
+    // 代表値のエンコード出力を固定する。文字列 / bytes は UTF-8 バイト順化
+    // （#39）で各文字が UTF-8 バイト列（latin1 1文字 = 1バイト）へ展開される。
+    it("encodeNumber の出力が変わっていない", () => {
       expect(encodeNumber(0)).toBe("8000000000000000");
       expect(encodeNumber(1)).toBe("bff0000000000000");
       expect(encodeNumber(-1)).toBe("400fffffffffffff");
@@ -223,15 +259,16 @@ describe("firestore-key", () => {
       expect(encodeNumber(Number.NaN)).toBe("0000000000000000");
     });
 
-    it("bytes キー（base64 → latin1）の出力が旧実装と一致する", () => {
+    it("bytes キー（base64 → latin1 → UTF-8 バイト展開）の出力が一致する", () => {
       // バイト列 [0x68, 0xc3, 0xa9, 0x00, 0x01, 0xff]（マルチバイト・制御文字含む）
+      // 0x80 以上のバイトは UTF-8 の2バイト形（C2/C3 + 継続バイト）へ展開される
       const b64 = Buffer.from([0x68, 0xc3, 0xa9, 0x00, 0x01, 0xff]).toString("base64");
       expect(valueKey({ __type: "bytes", value: b64 })).toBe(
-        "6h\u00c3\u00a9\u0002\u0001\u0002\u0002\u00ff\u0001",
+        "6h\u00c3\u0083\u00c2\u00a9\u0002\u0001\u0002\u0002\u00c3\u00bf\u0001",
       );
     });
 
-    it("timestamp キーの出力が旧実装と一致する", () => {
+    it("timestamp キーの出力が変わっていない", () => {
       expect(
         valueKey({ __type: "timestamp", value: { seconds: 1700000000, nanoseconds: 123456000 } }),
       ).toBe("4c1d954fc40000000123456000");
