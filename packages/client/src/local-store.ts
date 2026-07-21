@@ -11,6 +11,8 @@ import {
   applyUpdateMutation,
   type MutationContext,
 } from "@local-firestore/shared";
+import type { CacheStorageLike } from "./local-cache.js";
+import { resolveCacheStorage } from "./local-cache.js";
 import { logDebug } from "./logger.js";
 import { isNetworkEnabled } from "./network-state.js";
 import { FirestoreError, isTransientError } from "./transport.js";
@@ -98,6 +100,27 @@ function nowTimestamp(): SerializedTimestamp {
   };
 }
 
+/** 永続キャッシュのストレージキー（データベースIDごとに分離） */
+function cacheStorageKey(firestore: Firestore): string {
+  return `local-firestore/cache/${firestore._databaseId ?? "(default)"}`;
+}
+
+/** 永続化される状態（JSON シリアライズ可能なワイヤ形式のみ） */
+interface PersistedState {
+  remoteDocs: Array<{
+    path: string;
+    exists: boolean;
+    data: DocumentData | null;
+    createTime: string | null;
+    updateTime: string | null;
+  }>;
+  mutations: Array<{
+    operations: MutationOperation[];
+    localWriteTime: SerializedTimestamp;
+    endpoint: "direct" | "batch";
+  }>;
+}
+
 function toFirestoreError(err: unknown): FirestoreError {
   if (err instanceof FirestoreError) return err;
   if (
@@ -121,8 +144,108 @@ export class LocalStore {
   /** 一過性エラー後の再送タイマー */
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelayMs = RETRY_INITIAL_DELAY_MS;
+  /** 永続キャッシュのストレージ（persistentLocalCache 設定時のみ） */
+  private storage?: CacheStorageLike;
+  private storageKey: string;
+  /** 永続化失敗（quota 超過等）の警告を1回に抑えるフラグ */
+  private persistWarned = false;
 
-  constructor(private firestore: Firestore) {}
+  constructor(private firestore: Firestore) {
+    this.storageKey = cacheStorageKey(firestore);
+    if (firestore._localCache?.kind === "persistent") {
+      this.storage = resolveCacheStorage(firestore._localCache);
+      this.restore();
+    }
+  }
+
+  // ──────────────────────────────────────────────
+  // 永続化（persistentLocalCache）
+  // ──────────────────────────────────────────────
+
+  /**
+   * 永続化された状態（リモートキャッシュ + 未確定の保留書き込み）を復元する。
+   * 復元した保留書き込みはネットワーク有効時に自動送信される。
+   */
+  private restore(): void {
+    if (!this.storage) return;
+    let raw: string | null;
+    try {
+      raw = this.storage.getItem(this.storageKey);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+
+    let state: PersistedState;
+    try {
+      state = JSON.parse(raw) as PersistedState;
+    } catch {
+      logDebug("Persisted cache is corrupted; starting with an empty cache");
+      return;
+    }
+
+    for (const doc of state.remoteDocs ?? []) {
+      this.remoteDocs.set(doc.path, {
+        exists: doc.exists,
+        data: doc.data,
+        createTime: doc.createTime,
+        updateTime: doc.updateTime,
+      });
+    }
+
+    for (const m of state.mutations ?? []) {
+      let resolve!: () => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      // 復元されたミューテーションは元の呼び出し元がいないため、
+      // 拒否を unhandled rejection にしない
+      promise.catch(() => {});
+      this.mutations.push({
+        batchId: this.nextBatchId++,
+        operations: m.operations,
+        localWriteTime: m.localWriteTime,
+        endpoint: m.endpoint,
+        state: "pending",
+        sent: false,
+        promise,
+        resolve,
+        reject,
+      });
+    }
+
+    if (this.mutations.length > 0) {
+      logDebug(`Restored ${this.mutations.length} pending write(s) from persisted cache`);
+      // 復元した保留書き込みをバックグラウンドで送信する（本家の再起動時と同じ挙動）
+      void this.flush();
+    }
+  }
+
+  /** 現在の状態を永続化する（persistentLocalCache 設定時のみ） */
+  private persist(): void {
+    if (!this.storage) return;
+    const state: PersistedState = {
+      remoteDocs: [...this.remoteDocs.entries()].map(([path, doc]) => ({ path, ...doc })),
+      // acknowledged はサーバー確定済みのため、未確定（pending）のみ永続化する
+      mutations: this.mutations
+        .filter((m) => m.state === "pending")
+        .map((m) => ({
+          operations: m.operations,
+          localWriteTime: m.localWriteTime,
+          endpoint: m.endpoint,
+        })),
+    };
+    try {
+      this.storage.setItem(this.storageKey, JSON.stringify(state));
+    } catch (err) {
+      if (!this.persistWarned) {
+        this.persistWarned = true;
+        logDebug(`Failed to persist cache (storage quota?): ${String(err)}`);
+      }
+    }
+  }
 
   // ──────────────────────────────────────────────
   // リスナー / 購読管理
@@ -365,6 +488,8 @@ export class LocalStore {
           next.ackedUpdateTimes = await this.send(next);
           next.state = "acknowledged";
           this.retryDelayMs = RETRY_INITIAL_DELAY_MS;
+          // ack 済みは永続化対象から外れる（release 前でも notify を経ないため明示）
+          this.persist();
           next.resolve();
         } catch (err) {
           const error = toFirestoreError(err);
@@ -501,6 +626,7 @@ export class LocalStore {
   }
 
   private notify(paths: Set<string>): void {
+    this.persist();
     if (paths.size === 0) return;
     for (const listener of this.changeListeners) {
       listener(paths);
@@ -518,4 +644,20 @@ export function getLocalStore(firestore: Firestore): LocalStore {
     localStores.set(firestore, store);
   }
   return store;
+}
+
+/** @internal LocalStore が作成済みか（persistence API の開始前チェック用） */
+export function hasLocalStore(firestore: Firestore): boolean {
+  return localStores.has(firestore);
+}
+
+/** @internal 永続キャッシュのデータを削除する（clearIndexedDbPersistence 用） */
+export function clearPersistedCache(firestore: Firestore): void {
+  const cache = firestore._localCache;
+  const storage = cache?.kind === "persistent" ? resolveCacheStorage(cache) : undefined;
+  try {
+    storage?.removeItem(cacheStorageKey(firestore));
+  } catch {
+    // ストレージ未対応環境では何もしない
+  }
 }

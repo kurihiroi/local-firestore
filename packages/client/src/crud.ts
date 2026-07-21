@@ -6,6 +6,7 @@ import type {
   UpdateData,
   WithFieldValue,
 } from "@local-firestore/shared";
+import { assertNotTerminated } from "./lifecycle.js";
 import { getLocalStore } from "./local-store.js";
 import { isNetworkEnabled } from "./network-state.js";
 import { doc } from "./references.js";
@@ -45,6 +46,7 @@ const OFFLINE_ERROR_MESSAGE = "Failed to get document because the client is offl
 export async function getDoc<T = DocumentData>(
   reference: DocumentReference<T>,
 ): Promise<DocumentSnapshot<T>> {
+  assertNotTerminated(reference._firestore);
   if (!isNetworkEnabled(reference._firestore)) {
     return snapshotFromLocalStore(reference, OFFLINE_ERROR_MESSAGE);
   }
@@ -62,6 +64,7 @@ export async function getDoc<T = DocumentData>(
 export async function getDocFromServer<T = DocumentData>(
   reference: DocumentReference<T>,
 ): Promise<DocumentSnapshot<T>> {
+  assertNotTerminated(reference._firestore);
   const transport = reference._firestore._transport;
   const res = await transport.get<GetDocumentResponse>(`/docs/${reference.path}`);
 
@@ -103,6 +106,7 @@ export async function getDocFromServer<T = DocumentData>(
 export async function getDocFromCache<T = DocumentData>(
   reference: DocumentReference<T>,
 ): Promise<DocumentSnapshot<T>> {
+  assertNotTerminated(reference._firestore);
   return snapshotFromLocalStore(
     reference,
     "Failed to get document from cache. (However, this document may exist on the server. " +
@@ -163,6 +167,7 @@ export async function setDoc<T = DocumentData>(
   data: WithFieldValue<T> | PartialWithFieldValue<T>,
   options?: SetOptions,
 ): Promise<void> {
+  assertNotTerminated(reference._firestore);
   const converted = reference._converter
     ? options
       ? reference._converter.toFirestore(data as PartialWithFieldValue<T>, options)
@@ -210,6 +215,7 @@ export async function updateDoc<T = DocumentData>(
   dataOrField: UpdateData<T> | string | FieldPath,
   ...moreFieldsAndValues: unknown[]
 ): Promise<void> {
+  assertNotTerminated(reference._firestore);
   const raw = buildUpdateData(dataOrField as Record<string, unknown>, moreFieldsAndValues);
   const data = serializeData(raw as DocumentData, serializeOptionsOf(reference._firestore));
 
@@ -220,6 +226,7 @@ export async function updateDoc<T = DocumentData>(
 
 /** ドキュメントを削除する */
 export async function deleteDoc<T = DocumentData>(reference: DocumentReference<T>): Promise<void> {
+  assertNotTerminated(reference._firestore);
   return getLocalStore(reference._firestore).enqueue([{ type: "delete", path: reference.path }]);
 }
 

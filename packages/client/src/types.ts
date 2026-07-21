@@ -4,6 +4,7 @@ import type {
   SerializedTimestamp,
 } from "@local-firestore/shared";
 import { formatFieldPath } from "@local-firestore/shared";
+import type { FirestoreLocalCache } from "./local-cache.js";
 import type { HttpTransport } from "./transport.js";
 
 /** Firestoreインスタンス */
@@ -15,6 +16,10 @@ export interface Firestore {
   readonly _databaseId?: string;
   /** @internal undefined 値のフィールドを黙って除外するか（FirestoreSettings 由来） */
   readonly _ignoreUndefinedProperties?: boolean;
+  /** @internal ローカルキャッシュ設定（FirestoreSettings.localCache 由来） */
+  _localCache?: FirestoreLocalCache;
+  /** @internal terminate() 済みかどうか（以降の操作は failed-precondition になる） */
+  _terminated?: boolean;
 }
 
 /** ドキュメントリファレンス */

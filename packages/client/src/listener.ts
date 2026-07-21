@@ -7,6 +7,7 @@ import type {
 } from "@local-firestore/shared";
 import { applyQueryConstraints, matchesCollection } from "@local-firestore/shared";
 import { type ConnectionManager, getConnectionManager } from "./connection.js";
+import { assertNotTerminated } from "./lifecycle.js";
 import { type ComposedDocument, getLocalStore } from "./local-store.js";
 import type { Query } from "./query.js";
 import { validateConstraints } from "./query.js";
@@ -521,10 +522,7 @@ export function onSnapshotDoc<T = DocumentData>(
   options?: SnapshotListenOptions,
 ): Unsubscribe {
   const firestore = ref._firestore;
-  const manager = getConnectionManager(firestore);
-  ensureMessageHandler(manager, firestore);
-  ensureLocalStoreSubscription(firestore);
-  manager.connect();
+  assertNotTerminated(firestore);
 
   const subscriptionId = generateSubscriptionId();
   const localStore = getLocalStore(firestore);
@@ -537,6 +535,37 @@ export function onSnapshotDoc<T = DocumentData>(
     converter: ref._converter as FirestoreDataConverter<unknown> | null,
     includeMetadataChanges: options?.includeMetadataChanges ?? false,
   };
+
+  // source: 'cache' はサーバーへ購読せず、ローカルキャッシュの変化のみを配信する
+  if (options?.source === "cache") {
+    ensureLocalStoreSubscription(firestore);
+    subscriptionCallbacks.set(subscriptionId, docCb);
+    localStore.addDocInterest(ref.path);
+
+    emitComposedDocSnapshot(docCb, firestore);
+    if (!docCb.lastEmitted) {
+      // キャッシュに状態がない場合も本家同様「存在しない」スナップショットを即時発火する
+      docCb.lastEmitted = {
+        exists: false,
+        dataJson: "",
+        updateTime: null,
+        hasPendingWrites: false,
+        fromCache: true,
+      };
+      onNext(new DocumentSnapshotImpl(ref, null, null, null, new SnapshotMetadata(false, true)));
+    }
+
+    return () => {
+      subscriptionCallbacks.delete(subscriptionId);
+      localStore.removeDocInterest(ref.path);
+    };
+  }
+
+  const manager = getConnectionManager(firestore);
+  ensureMessageHandler(manager, firestore);
+  ensureLocalStoreSubscription(firestore);
+  manager.connect();
+
   subscriptionCallbacks.set(subscriptionId, docCb);
 
   // acknowledged mutation の除去判定（サーバー反映の観測）に購読中パスを登録する
@@ -578,10 +607,7 @@ export function onSnapshotQuery<T = DocumentData>(
   }
 
   const firestore = queryOrRef._firestore;
-  const manager = getConnectionManager(firestore);
-  ensureMessageHandler(manager, firestore);
-  ensureLocalStoreSubscription(firestore);
-  manager.connect();
+  assertNotTerminated(firestore);
 
   const subscriptionId = generateSubscriptionId();
 
@@ -599,7 +625,7 @@ export function onSnapshotQuery<T = DocumentData>(
     constraints = queryOrRef.constraints;
   }
 
-  subscriptionCallbacks.set(subscriptionId, {
+  const queryCb: QueryCallback<unknown> = {
     kind: "query",
     onNext: onNext as (snapshot: QuerySnapshot<unknown>) => void,
     onError,
@@ -612,7 +638,49 @@ export function onSnapshotQuery<T = DocumentData>(
     hasFindNearest: constraints.some((c) => c.type === "findNearest"),
     includeMetadataChanges: options?.includeMetadataChanges ?? false,
     receivedServerSnapshot: false,
-  });
+  };
+
+  // source: 'cache' はサーバーへ購読せず、ローカルキャッシュの変化のみを配信する
+  if (options?.source === "cache") {
+    if (queryCb.hasFindNearest) {
+      throw new FirestoreError(
+        "invalid-argument",
+        "findNearest queries cannot be listened to from cache",
+      );
+    }
+    ensureLocalStoreSubscription(firestore);
+    subscriptionCallbacks.set(subscriptionId, queryCb);
+
+    // 初回: ローカルストアが状態を知っている全ドキュメントから結果集合を合成する
+    const localStore = getLocalStore(firestore);
+    const candidates: EmittedQueryDoc[] = [];
+    for (const path of localStore.getKnownPaths()) {
+      if (!matchesCollection(path, collectionPath, collectionGroup)) continue;
+      const composed = localStore.composeDocument(path);
+      if (composed?.exists && composed.data) {
+        candidates.push({
+          path,
+          data: composed.data,
+          createTime: composed.createTime,
+          updateTime: composed.updateTime,
+          hasPendingWrites: composed.hasPendingWrites,
+        });
+      }
+    }
+    const result = applyQueryConstraints(candidates, collectionPath, collectionGroup, constraints);
+    emitQueryResult(queryCb, result, true);
+
+    return () => {
+      subscriptionCallbacks.delete(subscriptionId);
+    };
+  }
+
+  const manager = getConnectionManager(firestore);
+  ensureMessageHandler(manager, firestore);
+  ensureLocalStoreSubscription(firestore);
+  manager.connect();
+
+  subscriptionCallbacks.set(subscriptionId, queryCb);
 
   // 認証トークンは送信のたびに取得する（再接続時にも最新のトークンが使われる）
   const buildMessage = async () =>
@@ -646,7 +714,7 @@ export interface SnapshotObserver<S> {
   complete?: () => void;
 }
 
-/** リスナーのソース指定（ローカルでは常にサーバーから配信されるため実質 no-op） */
+/** リスナーのソース指定 */
 export type ListenSource = "default" | "cache";
 
 /**
@@ -654,7 +722,8 @@ export type ListenSource = "default" | "cache";
  *
  * `includeMetadataChanges: true` を指定すると、データが同じで metadata
  * （hasPendingWrites / fromCache）のみ変化した場合にも発火する（本家互換）。
- * `source` は常にサーバー配信のため no-op（型互換のために受け付ける）。
+ * `source: 'cache'` を指定すると、サーバーへ購読せずローカルキャッシュ
+ * （キャッシュ済みスナップショット + 保留中の書き込み）の変化のみを配信する。
  */
 export interface SnapshotListenOptions {
   readonly includeMetadataChanges?: boolean;

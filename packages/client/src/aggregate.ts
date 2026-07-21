@@ -5,6 +5,7 @@ import type {
   SerializedAggregateSpec,
 } from "@local-firestore/shared";
 import { queryEqual } from "./comparisons.js";
+import { assertNotTerminated } from "./lifecycle.js";
 import { type Query, query as toQuery } from "./query.js";
 import type { CollectionReference } from "./types.js";
 
@@ -117,6 +118,7 @@ export async function getAggregateFromServer<
 ): Promise<AggregateQuerySnapshot<AggregateSpecType, T>> {
   // CollectionReferenceをQueryに変換
   const q: Query<T> = queryOrRef.type === "collection" ? toQuery(queryOrRef) : queryOrRef;
+  assertNotTerminated(q._firestore);
 
   // AggregateSpecをシリアライズ
   const serializedSpec: SerializedAggregateSpec = {};

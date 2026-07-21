@@ -55,11 +55,17 @@ export type {
   LogLevel,
 } from "./firestore.js";
 export {
+  clearIndexedDbPersistence,
   connectFirestoreEmulator,
   disableNetwork,
+  enableIndexedDbPersistence,
+  enableMultiTabIndexedDbPersistence,
   enableNetwork,
   getFirestore,
   initializeFirestore,
+  loadBundle,
+  namedQuery,
+  setIndexConfiguration,
   setLogLevel,
   terminate,
   waitForPendingWrites,
@@ -75,6 +81,22 @@ export type {
   Unsubscribe,
 } from "./listener.js";
 export { onSnapshot, onSnapshotsInSync } from "./listener.js";
+// ローカルキャッシュ設定（本家互換）
+export type {
+  CacheStorageLike,
+  FirestoreLocalCache,
+  MemoryLocalCache,
+  PersistentCacheSettings,
+  PersistentLocalCache,
+  PersistentTabManager,
+} from "./local-cache.js";
+export {
+  CACHE_SIZE_UNLIMITED,
+  memoryLocalCache,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  persistentSingleTabManager,
+} from "./local-cache.js";
 export type {
   FindNearestOptions,
   Query,
