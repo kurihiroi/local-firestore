@@ -1,5 +1,8 @@
 import { getConnectionManager, hasConnectionManager } from "./connection.js";
-import { getLocalStore } from "./local-store.js";
+import { assertNotTerminated } from "./lifecycle.js";
+import type { FirestoreLocalCache } from "./local-cache.js";
+import { persistentLocalCache } from "./local-cache.js";
+import { clearPersistedCache, getLocalStore, hasLocalStore } from "./local-store.js";
 import { logDebug } from "./logger.js";
 import { setNetworkEnabled } from "./network-state.js";
 import type { AuthTokenProvider } from "./transport.js";
@@ -36,6 +39,18 @@ export interface FirestoreSettings {
    * デフォルト（false）では undefined 値は invalid-argument エラーになる（本家同様）。
    */
   ignoreUndefinedProperties?: boolean;
+  /**
+   * ローカルキャッシュ設定（本家互換）。
+   * `persistentLocalCache()` を指定すると、キャッシュと保留中の書き込みが
+   * Web Storage 互換ストア（デフォルト: localStorage）へ永続化され、
+   * ページリロード / プロセス再起動をまたいで復元される。
+   * デフォルトは `memoryLocalCache()` 相当（インメモリ）。
+   */
+  localCache?: FirestoreLocalCache;
+  /**
+   * 本家互換のため受け付けるが、ローカルではキャッシュサイズ制限は行わない。
+   */
+  cacheSizeBytes?: number;
 }
 
 const DEFAULT_SETTINGS = {
@@ -59,7 +74,9 @@ function isFirestoreSettings(value: unknown): value is FirestoreSettings {
     "port" in obj ||
     "ssl" in obj ||
     "authTokenProvider" in obj ||
-    "ignoreUndefinedProperties" in obj
+    "ignoreUndefinedProperties" in obj ||
+    "localCache" in obj ||
+    "cacheSizeBytes" in obj
   );
 }
 
@@ -137,6 +154,7 @@ function createFirestoreInstance(
     _transport: transport,
     _databaseId: databaseId,
     _ignoreUndefinedProperties: settings?.ignoreUndefinedProperties ?? false,
+    _localCache: settings?.localCache,
   } as Firestore;
 }
 
@@ -254,10 +272,101 @@ export function initializeFirestore(_app: unknown, settings: FirestoreSettings):
   return getFirestore(settings);
 }
 
-/** Firestore インスタンスを終了する */
+/**
+ * Firestore インスタンスを終了する。
+ *
+ * 以降このインスタンスに対する操作は failed-precondition で拒否される（本家互換）。
+ * 永続キャッシュ（persistentLocalCache）のデータは削除されない。
+ * 削除するには terminate 後に `clearIndexedDbPersistence()` を呼び出す。
+ */
 export function terminate(firestore: Firestore): Promise<void> {
-  const manager = getConnectionManager(firestore);
-  manager.dispose();
+  if (firestore._terminated) return Promise.resolve();
+  firestore._terminated = true;
+  if (hasConnectionManager(firestore)) {
+    getConnectionManager(firestore).dispose();
+  }
+  return Promise.resolve();
+}
+
+/**
+ * enableIndexedDbPersistence - 本家互換の永続化有効化（deprecated API のシム）
+ *
+ * `persistentLocalCache()` 設定と同じ効果を持つ。本家同様、他の Firestore
+ * 操作より前に呼び出す必要がある（開始後の呼び出しは failed-precondition）。
+ * 永続化先は IndexedDB ではなく Web Storage 互換ストア（localStorage）。
+ */
+export function enableIndexedDbPersistence(firestore: Firestore): Promise<void> {
+  assertNotTerminated(firestore);
+  if (hasLocalStore(firestore) || hasConnectionManager(firestore)) {
+    return Promise.reject(
+      new FirestoreError(
+        "failed-precondition",
+        "Firestore has already been started and persistence can no longer be enabled. " +
+          "enableIndexedDbPersistence() must be called before any other Firestore operation.",
+      ),
+    );
+  }
+  firestore._localCache = persistentLocalCache();
+  return Promise.resolve();
+}
+
+/** enableMultiTabIndexedDbPersistence - 本家互換シム（ローカルではタブ間協調は行わない） */
+export function enableMultiTabIndexedDbPersistence(firestore: Firestore): Promise<void> {
+  return enableIndexedDbPersistence(firestore);
+}
+
+/**
+ * clearIndexedDbPersistence - 永続キャッシュのデータを削除する
+ *
+ * 本家同様、クライアントの開始前または terminate 後にのみ呼び出せる。
+ */
+export function clearIndexedDbPersistence(firestore: Firestore): Promise<void> {
+  const started = hasLocalStore(firestore) || hasConnectionManager(firestore);
+  if (started && !firestore._terminated) {
+    return Promise.reject(
+      new FirestoreError(
+        "failed-precondition",
+        "Persistence can only be cleared before the client is started or after it is terminated.",
+      ),
+    );
+  }
+  clearPersistedCache(firestore);
+  return Promise.resolve();
+}
+
+/**
+ * loadBundle - 本家互換の型解決のためのスタブ
+ *
+ * バンドルの読み込みは local-firestore では未対応（サーバーへ直接クエリする
+ * 前提のため）。呼び出すと unimplemented で reject する。
+ */
+export function loadBundle(_firestore: Firestore, _bundleData: unknown): Promise<never> {
+  return Promise.reject(
+    new FirestoreError("unimplemented", "loadBundle() is not supported by local-firestore."),
+  );
+}
+
+/**
+ * namedQuery - 本家互換シム
+ *
+ * バンドル未対応のため、本家で「該当する名前付きクエリが存在しない」場合と
+ * 同じ null を常に返す。
+ */
+export function namedQuery(_firestore: Firestore, _name: string): Promise<null> {
+  return Promise.resolve(null);
+}
+
+/**
+ * setIndexConfiguration - 本家互換シム
+ *
+ * local-firestore サーバーは全フィールドを自動インデックスするため設定は
+ * 不要（本家でもクライアント側インデックスはヒント扱い）。常に成功する。
+ */
+export function setIndexConfiguration(
+  firestore: Firestore,
+  _configuration: unknown,
+): Promise<void> {
+  assertNotTerminated(firestore);
   return Promise.resolve();
 }
 
@@ -269,6 +378,7 @@ export function terminate(firestore: Firestore): Promise<void> {
  * まとめてサーバーへ送信される。
  */
 export function disableNetwork(firestore: Firestore): Promise<void> {
+  assertNotTerminated(firestore);
   setNetworkEnabled(firestore, false);
   const manager = getConnectionManager(firestore);
   manager.disconnect();
@@ -278,6 +388,7 @@ export function disableNetwork(firestore: Firestore): Promise<void> {
 
 /** ネットワーク接続を有効化し、キュー済みの書き込みをフラッシュする */
 export async function enableNetwork(firestore: Firestore): Promise<void> {
+  assertNotTerminated(firestore);
   setNetworkEnabled(firestore, true);
   const manager = getConnectionManager(firestore);
   manager.connect();
@@ -291,5 +402,6 @@ export async function enableNetwork(firestore: Firestore): Promise<void> {
  * 呼び出し時点でキューにある書き込みのみを待つ（本家と同じセマンティクス）。
  */
 export function waitForPendingWrites(firestore: Firestore): Promise<void> {
+  assertNotTerminated(firestore);
   return getLocalStore(firestore).waitForPendingWrites();
 }

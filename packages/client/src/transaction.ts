@@ -11,6 +11,7 @@ import type {
 } from "@local-firestore/shared";
 import { ERROR_CODES, MAX_WRITE_OPERATIONS } from "@local-firestore/shared";
 import { buildUpdateData } from "./crud.js";
+import { assertNotTerminated } from "./lifecycle.js";
 import { deserializeData, serializeData } from "./serialization.js";
 import { QueryDocumentSnapshot } from "./snapshots.js";
 import { FirestoreError } from "./transport.js";
@@ -27,6 +28,7 @@ export async function runTransaction<T>(
   updateFunction: (transaction: Transaction) => Promise<T>,
   options?: TransactionOptions,
 ): Promise<T> {
+  assertNotTerminated(firestore);
   const maxAttempts = options?.maxAttempts ?? 5;
   const transport = firestore._transport;
 

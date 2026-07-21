@@ -8,6 +8,7 @@ import type {
 } from "@local-firestore/shared";
 import { MAX_WRITE_OPERATIONS } from "@local-firestore/shared";
 import { buildUpdateData } from "./crud.js";
+import { assertNotTerminated } from "./lifecycle.js";
 import { getLocalStore } from "./local-store.js";
 import { serializeData } from "./serialization.js";
 import { FirestoreError } from "./transport.js";
@@ -15,6 +16,7 @@ import type { DocumentReference, FieldPath, Firestore } from "./types.js";
 
 /** WriteBatchオブジェクトを作成する */
 export function writeBatch(firestore: Firestore): WriteBatch {
+  assertNotTerminated(firestore);
   return new WriteBatch(firestore);
 }
 

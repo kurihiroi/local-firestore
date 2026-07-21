@@ -279,7 +279,7 @@ describe("onSnapshot() with SnapshotListenOptions", () => {
     const onNext = vi.fn();
     const onError = vi.fn();
 
-    const unsubscribe = onSnapshot(ref, { source: "cache" }, onNext, onError);
+    const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, onNext, onError);
 
     const [subscriptionId] = manager.registerSubscription.mock.calls[0];
     const handler = manager.setMessageHandler.mock.calls[0][0];

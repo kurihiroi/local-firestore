@@ -14,6 +14,7 @@ import {
   matchesCollection,
   validateQueryFilters,
 } from "@local-firestore/shared";
+import { assertNotTerminated } from "./lifecycle.js";
 import { getLocalStore } from "./local-store.js";
 import { isNetworkEnabled } from "./network-state.js";
 import { deserializeData, serializeValue } from "./serialization.js";
@@ -408,6 +409,7 @@ export async function getDocs<T = DocumentData>(
   queryOrRef: Query<T> | CollectionReference<T>,
 ): Promise<QuerySnapshot<T>> {
   const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
+  assertNotTerminated(q._firestore);
 
   if (!isNetworkEnabled(q._firestore)) {
     return getDocsFromCache(queryOrRef);
@@ -429,6 +431,7 @@ export async function getDocsFromServer<T = DocumentData>(
   queryOrRef: Query<T> | CollectionReference<T>,
 ): Promise<QuerySnapshot<T>> {
   const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
+  assertNotTerminated(q._firestore);
 
   validateConstraints(q.constraints);
 
@@ -524,6 +527,7 @@ export async function getDocsFromCache<T = DocumentData>(
   queryOrRef: Query<T> | CollectionReference<T>,
 ): Promise<QuerySnapshot<T>> {
   const q: Query<T> = queryOrRef.type === "collection" ? query(queryOrRef) : queryOrRef;
+  assertNotTerminated(q._firestore);
 
   validateConstraints(q.constraints);
   if (q.constraints.some((c) => c.type === "findNearest")) {
